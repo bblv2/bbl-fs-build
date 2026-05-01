@@ -15,7 +15,7 @@ if [[ -r "$ENV_FILE" ]]; then
     . "$ENV_FILE"
 fi
 
-: "${BBL_BUILD_REPO:=git@github.com:bblv2/bbl-fs-build.git}"
+: "${BBL_BUILD_REPO:=https://github.com/bblv2/bbl-fs-build.git}"
 : "${BBL_BUILD_BRANCH:=main}"
 : "${BBL_ROLE:=beta}"
 : "${BBL_SIZE:=large}"
