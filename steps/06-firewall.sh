@@ -34,9 +34,7 @@ ufw allow 5081/udp comment 'sip client tls'
 # WebRTC (sofia client profile)
 ufw allow 7443/tcp comment 'wss webrtc'
 
-# RTP — narrow range. FS default is 16384-32768, we narrow to
-# 16384-32767 (~16K ports = ~8000 simultaneous calls cap, well above
-# our 720-concurrent ceiling on g6-dedicated-8).
+# RTP port range — matches FS default
 ufw allow 16384:32767/udp comment 'rtp'
 
 # HTTP for acme.sh standalone renewals (port 80 only when renewing,

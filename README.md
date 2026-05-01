@@ -13,13 +13,13 @@ Provisioning script for BBL FreeSWITCH boxes on Linode. Pairs with [`bbl-fs-conf
 ## Sizes
 
 ```
-small   g6-standard-2     2c  4G   $24/mo   ~50 callers   dev/staging
-medium  g6-dedicated-4    4c  8G   $72/mo   ~200          mid-size prod
-large   g6-dedicated-8    8c 16G   $144/mo  ~600          full prod (proven by fs-atl)
-xlarge  g6-dedicated-16  16c 32G   $288/mo  ~1200         headroom / future-prod
+small   g6-standard-2     2c  4G   $24/mo    dev / staging
+medium  g6-dedicated-4    4c  8G   $72/mo    small workloads
+large   g6-dedicated-8    8c 16G   $144/mo   standard prod
+xlarge  g6-dedicated-16  16c 32G   $288/mo   high-headroom prod
 ```
 
-Capacity numbers are empirical from the 2026-05-01 overnight load battery; re-validate against the regression suite when bumping FS versions.
+Pick the size that matches your expected load. The build is identical across sizes — same Debian, same FS module set, same configuration overlay.
 
 ## Provisioning a new box
 

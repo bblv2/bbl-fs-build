@@ -69,7 +69,7 @@ net.core.wmem_max     = 33554432
 net.core.rmem_default =   262144
 net.core.wmem_default =   262144
 net.ipv4.udp_mem      = 4096 87380 33554432
-# Conntrack table large enough for thousands of concurrent calls
+# Larger conntrack table for high-volume call workloads
 net.netfilter.nf_conntrack_max = 524288
 # More backlog for SIP signaling bursts
 net.core.somaxconn    = 4096
