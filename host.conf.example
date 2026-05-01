@@ -11,11 +11,15 @@
 
 # ── REQUIRED — bbl-fs-config knobs ───────────────────────────────────
 
-# The box's public IPv4. Must match the Linode you're provisioning.
+# The box's public IPv4. Leave blank — provision.sh creates the Linode,
+# then setup.sh on the box auto-detects via `ip route get 1.1.1.1` and
+# fills this in. Manually set ONLY for an existing box where you want
+# to force a specific IP (multi-NIC setups, floating IP, etc.).
 BBL_EXTERNAL_IP=
 
-# The box's FQDN. Must resolve to BBL_EXTERNAL_IP (set DNS first or
-# use a Floating IP that can be reassigned).
+# The box's FQDN. provision.sh creates a DNS A record automatically
+# in the matching Linode-managed zone; subdomain is everything before
+# the matching zone name (e.g. fs-test-1 in fs-test-1.bblapp.io).
 BBL_DOMAIN=
 
 # ── REQUIRED — secrets ───────────────────────────────────────────────

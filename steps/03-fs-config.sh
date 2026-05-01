@@ -11,9 +11,25 @@ if [[ ! -r "$BBL_HOST_CONF" ]]; then
     exit 1
 fi
 
-# Validate required vars
+# Validate required vars; auto-discover BBL_EXTERNAL_IP if absent
 # shellcheck disable=SC1090
 . "$BBL_HOST_CONF"
+if [[ -z "${BBL_EXTERNAL_IP:-}" ]]; then
+    detected="$(ip -4 route get 1.1.1.1 2>/dev/null | awk 'NR==1 {for(i=1;i<=NF;i++) if($i=="src") print $(i+1)}')"
+    if [[ -z "$detected" ]]; then
+        echo "$0: BBL_EXTERNAL_IP not set in host.conf and auto-detect failed" >&2
+        exit 1
+    fi
+    echo "==> Auto-detected BBL_EXTERNAL_IP=$detected (was blank in host.conf)"
+    BBL_EXTERNAL_IP="$detected"
+    # Persist back into host.conf so subsequent re-runs see it
+    if grep -q '^BBL_EXTERNAL_IP=' "$BBL_HOST_CONF"; then
+        sed -i "s|^BBL_EXTERNAL_IP=.*|BBL_EXTERNAL_IP=$detected|" "$BBL_HOST_CONF"
+    else
+        echo "BBL_EXTERNAL_IP=$detected" >> "$BBL_HOST_CONF"
+    fi
+    export BBL_EXTERNAL_IP
+fi
 for var in BBL_EXTERNAL_IP BBL_DOMAIN; do
     [[ -n "${!var:-}" ]] || { echo "$0: $var unset in $BBL_HOST_CONF" >&2; exit 1; }
 done

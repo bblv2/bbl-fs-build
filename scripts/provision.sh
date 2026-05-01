@@ -42,6 +42,29 @@ ROOT_PASS="$(openssl rand -base64 24)"
 
 echo "==> Provisioning ${ARGS[hostname]} as Linode $SKU in ${ARGS[region]}"
 
+# ── DNS: find the Linode-managed zone for this hostname ─────────────
+ROOT_DOMAIN=
+ZONE_ID=
+while read -r line; do
+    [[ -z "$line" ]] && continue
+    z_id="$(echo "$line" | jq -r '.id')"
+    z_dom="$(echo "$line" | jq -r '.domain')"
+    if [[ "${ARGS[hostname]}" == *".$z_dom" ]]; then
+        # Take longest match (e.g., a.b.example.com prefers example.com over com)
+        if (( ${#z_dom} > ${#ROOT_DOMAIN} )); then
+            ROOT_DOMAIN="$z_dom"
+            ZONE_ID="$z_id"
+        fi
+    fi
+done < <(linode-cli domains list --json | jq -c '.[]')
+
+if [[ -z "$ZONE_ID" ]]; then
+    echo "$0: no Linode-managed zone matches '${ARGS[hostname]}' — add the zone in Linode DNS Manager first" >&2
+    exit 1
+fi
+SUBDOMAIN="${ARGS[hostname]%.$ROOT_DOMAIN}"
+echo "    DNS zone:    $ROOT_DOMAIN (ID $ZONE_ID), subdomain '$SUBDOMAIN'"
+
 # ── Build user_data: bootstrap.sh + the operator's host.conf ─────────
 TMPDIR="$(mktemp -d)"
 trap 'rm -rf "$TMPDIR"' EXIT
@@ -90,6 +113,36 @@ echo
 echo "  Linode ID:   $LINODE_ID"
 echo "  Public IPv4: $LINODE_IP"
 echo "  Root pass:   $ROOT_PASS  (write this down — Linode does not store it)"
+
+# ── Create DNS A record + wait for propagation ───────────────────────
+# Idempotent: if a record for this subdomain already exists, update it
+# instead of failing.
+echo "==> Setting DNS: $SUBDOMAIN.$ROOT_DOMAIN → $LINODE_IP (TTL 300)"
+EXISTING_RECORD_ID="$(linode-cli domains records-list "$ZONE_ID" --json \
+    | jq -r ".[] | select(.type == \"A\" and .name == \"$SUBDOMAIN\") | .id" | head -1)"
+if [[ -n "$EXISTING_RECORD_ID" ]]; then
+    echo "    A record exists (ID $EXISTING_RECORD_ID); updating target"
+    linode-cli domains records-update "$ZONE_ID" "$EXISTING_RECORD_ID" \
+        --target "$LINODE_IP" --ttl_sec 300 >/dev/null
+else
+    linode-cli domains records-create "$ZONE_ID" \
+        --type A --name "$SUBDOMAIN" --target "$LINODE_IP" --ttl_sec 300 >/dev/null
+fi
+
+# Wait for the auth NS to serve the new record. Linode publishes
+# changes within ~30s; we cap at 5 min.
+echo "==> Waiting for DNS propagation on ns1.linode.com..."
+for _ in $(seq 1 30); do
+    actual="$(dig +short @ns1.linode.com "${ARGS[hostname]}" 2>/dev/null | tail -1)"
+    if [[ "$actual" == "$LINODE_IP" ]]; then
+        echo "    DNS propagated: ${ARGS[hostname]} → $LINODE_IP"
+        break
+    fi
+    sleep 10
+done
+[[ "$(dig +short @ns1.linode.com "${ARGS[hostname]}" 2>/dev/null | tail -1)" == "$LINODE_IP" ]] \
+    || { echo "WARN: DNS hasn't propagated after 5 min; cert step may fail. Continuing." >&2; }
+
 echo
 echo "==> Waiting for cloud-init to finish bbl-fs-build (~5 min)..."
 echo "    Tail with:  ssh root@$LINODE_IP tail -f /var/log/bbl-fs-build.log"

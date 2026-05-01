@@ -50,6 +50,28 @@ fi
 echo "==> Deleting linode $LID"
 linode-cli linodes delete "$LID"
 
+# 4. Remove the DNS A record
+ROOT_DOMAIN=
+ZONE_ID=
+while read -r line; do
+    [[ -z "$line" ]] && continue
+    z_id="$(echo "$line" | jq -r '.id')"
+    z_dom="$(echo "$line" | jq -r '.domain')"
+    if [[ "$HOSTNAME" == *".$z_dom" ]] && (( ${#z_dom} > ${#ROOT_DOMAIN} )); then
+        ROOT_DOMAIN="$z_dom"; ZONE_ID="$z_id"
+    fi
+done < <(linode-cli domains list --json | jq -c '.[]')
+
+if [[ -n "$ZONE_ID" ]]; then
+    SUBDOMAIN="${HOSTNAME%.$ROOT_DOMAIN}"
+    REC_ID="$(linode-cli domains records-list "$ZONE_ID" --json \
+        | jq -r ".[] | select(.type == \"A\" and .name == \"$SUBDOMAIN\") | .id" | head -1)"
+    if [[ -n "$REC_ID" ]]; then
+        echo "==> Removing DNS A record ($SUBDOMAIN.$ROOT_DOMAIN, ID $REC_ID)"
+        linode-cli domains records-delete "$ZONE_ID" "$REC_ID" >/dev/null
+    fi
+fi
+
 echo
 echo "==> Teardown complete for $HOSTNAME"
 [[ "$SNAPSHOT" == "1" ]] && echo "    Snapshot retained: ${LABEL}-final-$(date -u +%Y%m%d)"
