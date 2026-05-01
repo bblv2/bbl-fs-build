@@ -1,0 +1,7 @@
+# bbl-fs-build managed — DO NOT EDIT
+# Nightly: push QC recordings older than 1d to B2, then trim local
+# retention to 7d. Failures land in /var/log/bbl-fs-recordings.log
+# AND go to root via the default cron MAILTO if configured.
+#
+# m   h   dom mon dow  user  command
+  17  4   *   *   *    root  /usr/local/sbin/bbl-fs-recordings-push.sh >>/var/log/bbl-fs-recordings.log 2>&1

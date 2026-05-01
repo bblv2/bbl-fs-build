@@ -1,0 +1,8 @@
+# NEVER commit filled-in host.conf — it contains secrets
+host.conf
+*.host.conf
+
+# Common cruft
+.DS_Store
+*.bak
+*.swp

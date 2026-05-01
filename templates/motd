@@ -1,0 +1,19 @@
+
+   ╔══════════════════════════════════════════════════════════════════╗
+   ║                  BBL FreeSWITCH — __BBL_HOSTNAME__               ║
+   ║                                                                  ║
+   ║  Role:        __BBL_ROLE__                                       ║
+   ║  Size:        __BBL_SIZE__                                       ║
+   ║  Built:       __BBL_BUILT_AT__                                   ║
+   ║  FS version:  __BBL_FS_VERSION__                                 ║
+   ║  Config:      __BBL_CONFIG_COMMIT__                              ║
+   ║                                                                  ║
+   ║  Useful:                                                         ║
+   ║    fs_cli                       attach to FS console             ║
+   ║    fs_cli -x 'show channels'    list active calls                ║
+   ║    journalctl -u freeswitch -f  live FS log                      ║
+   ║    cat /etc/bbl-fs-build        what's installed + when          ║
+   ║                                                                  ║
+   ║  Recordings: __BBL_REC_PATH__                                    ║
+   ║  Pushed nightly to b2:bbl-fs-recordings/__BBL_HOSTNAME__/        ║
+   ╚══════════════════════════════════════════════════════════════════╝

@@ -1,0 +1,66 @@
+#!/bin/bash
+# 03-fs-config.sh — clone bbl-fs-config and apply its overlay+templates.
+#
+# Lays down the BBL custom /etc/freeswitch/ on top of the apt-shipped
+# vanilla baseline. This step is where the BBL "secret sauce" lands.
+set -euo pipefail
+
+if [[ ! -r "$BBL_HOST_CONF" ]]; then
+    echo "$0: $BBL_HOST_CONF missing — write it before bbl-fs-build runs" >&2
+    echo "    (the linode-cli wrapper writes it at provision time)" >&2
+    exit 1
+fi
+
+# Validate required vars
+# shellcheck disable=SC1090
+. "$BBL_HOST_CONF"
+for var in BBL_EXTERNAL_IP BBL_DOMAIN; do
+    [[ -n "${!var:-}" ]] || { echo "$0: $var unset in $BBL_HOST_CONF" >&2; exit 1; }
+done
+
+CONFIG_REPO=${BBL_CONFIG_REPO:-git@github.com:bblv2/bbl-fs-config.git}
+CONFIG_BRANCH=${BBL_CONFIG_BRANCH:-main}
+CONFIG_DIR=/usr/src/bbl-fs-config
+
+echo "==> Cloning bbl-fs-config from $CONFIG_REPO"
+if [[ -d "$CONFIG_DIR/.git" ]]; then
+    git -C "$CONFIG_DIR" fetch --quiet
+    git -C "$CONFIG_DIR" reset --quiet --hard "origin/$CONFIG_BRANCH"
+else
+    git clone --quiet --branch "$CONFIG_BRANCH" "$CONFIG_REPO" "$CONFIG_DIR"
+fi
+
+echo "==> Lay down apt-shipped vanilla baseline"
+# /etc/freeswitch is created by `apt install freeswitch` but mostly empty.
+# The vanilla flavor is at /usr/share/freeswitch/conf/vanilla/.
+if [[ ! -f /etc/freeswitch/freeswitch.xml ]]; then
+    if [[ -d /usr/share/freeswitch/conf/vanilla ]]; then
+        cp -a /usr/share/freeswitch/conf/vanilla/. /etc/freeswitch/
+    else
+        echo "$0: no vanilla flavor in /usr/share/freeswitch/conf/ — install freeswitch-conf-vanilla" >&2
+        exit 1
+    fi
+fi
+
+echo "==> Apply BBL overlay + render templates"
+"$CONFIG_DIR/scripts/apply-config.sh" "$BBL_HOST_CONF"
+
+echo "==> Restart FreeSWITCH so systemd drop-in (script_dir, -rp) takes effect"
+systemctl daemon-reload
+systemctl enable freeswitch
+systemctl restart freeswitch
+
+# Wait for FS to come up cleanly
+echo "==> Waiting up to 30s for FreeSWITCH to accept fs_cli"
+for _ in $(seq 1 30); do
+    if fs_cli -x 'status' >/dev/null 2>&1; then
+        echo "==> FreeSWITCH is up:"
+        fs_cli -x 'status' | head -5
+        break
+    fi
+    sleep 1
+done
+fs_cli -x 'status' >/dev/null 2>&1 \
+    || { echo "$0: FreeSWITCH failed to start — check journalctl -u freeswitch" >&2; exit 1; }
+
+echo "==> 03-fs-config.sh complete"
