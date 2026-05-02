@@ -55,11 +55,17 @@ IP="$(linode-cli linodes view "$LID" --json | jq -r '.[0].ipv4[0]')"
 ssh "root@$IP" 'fs_cli -x "fsctl shutdown elegant"' || true
 sleep 5
 
-# 2. Snapshot for rollback
+# 2. Snapshot for rollback (only if Backups service is enabled on this Linode;
+#    Linode rejects snapshot calls with HTTP 400 otherwise)
 if (( SNAPSHOT )); then
-    echo "==> Taking final disk snapshot"
-    linode-cli linodes snapshot "$LID" --label "${LABEL}-final-$(date -u +%Y%m%d)" || true
-    sleep 10
+    BACKUPS_ENABLED="$(linode-cli linodes view "$LID" --json | jq -r '.[0].backups.enabled // false')"
+    if [[ "$BACKUPS_ENABLED" == "true" ]]; then
+        echo "==> Taking final disk snapshot"
+        linode-cli linodes snapshot "$LID" --label "${LABEL}-final-$(date -u +%Y%m%d)" || true
+        sleep 10
+    else
+        echo "==> Skipping snapshot (Backups not enabled on this Linode — would 400)"
+    fi
 fi
 
 # 3. Delete

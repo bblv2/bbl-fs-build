@@ -71,14 +71,29 @@ async def go(hostname: str, host_conf_path: str) -> None:
             n = await db.execute("DELETE FROM bridges_did WHERE number = $1", test_did)
             print(f"  bridges_did delete: {n}")
         if bridge_id:
+            # Soft-delete: bridges_conferencefreeswitch / bridges_conferencecall
+            # / bridges_cdr / bridges_recording etc. all FK back to
+            # bridges_bridge once any call has been placed against it.
+            # Hard-delete fails on the FK web. Also NULL the freeswitch_setup_id
+            # so the fs_setup row can be neutralized below.
             n = await db.execute(
-                "UPDATE bridges_bridge SET deleted = TRUE, date_deleted = $1 WHERE id = $2",
-                datetime.now(timezone.utc), int(bridge_id))
-            print(f"  bridges_bridge soft-delete: {n}")
+                "UPDATE bridges_bridge SET deleted = TRUE, date_deleted = NOW(), "
+                "freeswitch_setup_id = NULL WHERE id = $1",
+                int(bridge_id))
+            print(f"  bridges_bridge soft-delete + FK null: {n}")
         if fs_setup_id:
+            # Don't DELETE — bridges_conferencefreeswitch FKs to fs_setup too,
+            # blocking any delete on rows that ever hosted a conference.
+            # Instead, NEUTRALIZE: rename + zero the IP so the row is preserved
+            # for FK integrity but won't match any future routing lookup
+            # (Plivo/lb-atl find FS host by ip_address, never by id).
+            short = hostname.split(".", 1)[0][:8]   # nickname is varchar(15)
+            new_nick = f"del-{short}"[:15]
             n = await db.execute(
-                "DELETE FROM bridges_freeswitchsetup WHERE id = $1", int(fs_setup_id))
-            print(f"  bridges_freeswitchsetup delete: {n}")
+                "UPDATE bridges_freeswitchsetup SET nickname = $1, ip_address = $2, "
+                "dns_name = $3, jfb_url = $4 WHERE id = $5",
+                new_nick, "0.0.0.0", "", "", int(fs_setup_id))
+            print(f"  bridges_freeswitchsetup neutralize: {n}")
 
         # Pool release — clear assignment regardless of whether host.conf had pool_name
         if pool_name:
