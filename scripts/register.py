@@ -168,7 +168,7 @@ async def go(hostname: str) -> None:
                 FALSE, 'beep', 'beep',
                 TRUE,
                 FALSE, 2,
-                'normal', 'fs', 'genre',
+                'normal', 'fs', 'com.twilio.music.soft-rock',
                 FALSE, FALSE, FALSE,
                 FALSE, FALSE,
                 FALSE
