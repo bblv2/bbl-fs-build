@@ -74,6 +74,13 @@ install -d -o freeswitch -g freeswitch -m 750 /etc/freeswitch/tls
 ln -sf /etc/ssl/certs/ca-certificates.crt /etc/freeswitch/tls/cacert.pem
 chown -h freeswitch:freeswitch /etc/freeswitch/tls/cacert.pem
 
+# mod_http_cache writes downloaded files into /var/cache/freeswitch but
+# does NOT create the dir if missing — it just logs 'open() error: No
+# such file or directory' on every URL fetch. apt-installed FS doesn't
+# pre-create this dir.
+echo "==> Creating mod_http_cache cache dir"
+install -d -o freeswitch -g freeswitch -m 750 /var/cache/freeswitch
+
 echo "==> Restart FreeSWITCH so systemd drop-in (script_dir, -rp) takes effect"
 systemctl daemon-reload
 systemctl enable freeswitch
