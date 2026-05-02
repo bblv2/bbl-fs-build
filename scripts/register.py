@@ -138,28 +138,44 @@ async def go(hostname: str) -> None:
                 "http://lb-atl.bblapp.io:8084/")
             print(f"==> nodebblclean: inserted bridges_freeswitchsetup id={fs_id}")
 
-        # bridges_bridge — minimal Django-default-ish row, with a moderator PIN
-        # so PIN flow can be tested. welcome_option='D' (default) to avoid
-        # missing-upload silence we hit on bridge 20. welcome_text needs
-        # SOMETHING (NOT NULL constraint).
+        # bridges_bridge — full set of NOT-NULL columns (Django model has
+        # ~17 NOT NULL fields without defaults). Values mirror an existing
+        # working test bridge in nodebblclean (bridge 21 / test123 base).
+        # welcome_option='D' to avoid missing-upload silence.
         pin = gen_pin(4)
         welcome_text = (
             f"Welcome to bbl-fs-build test bridge {short}. "
-            "Conference will begin shortly. Please enjoy some music."
+            "Your conference will begin shortly."
         )
         bridge_id = await db.fetchval(
-            "INSERT INTO bridges_bridge "
-            "(company_id, freeswitch_setup_id, title, moderated, \"moderator_PIN\", "
-            "attended, welcome_option, welcome_text, music_choice, robo_voice, "
-            "on_participant_join, on_participant_leave, beep_on_participant_join, "
-            "deleted, announce_names, announce_names_settings, initial_mute_state, "
-            "seminar, playback_only_line, disable_unmuting_star_six, "
-            "enable_multiple_moderators, service_provider) "
-            "VALUES ($1, $2, $3, TRUE, $4, FALSE, 'D', $5, 'genre', 'man', "
-            "'beep', 'beep', TRUE, FALSE, FALSE, 2, 'normal', "
-            "FALSE, FALSE, FALSE, FALSE, 'fs') "
-            "RETURNING id",
-            TEST_COMPANY_ID, fs_id, short, pin, welcome_text)
+            """INSERT INTO bridges_bridge (
+                company_id, freeswitch_setup_id, title,
+                welcome_option, welcome_text, robo_voice,
+                hold_option, hold_text,
+                moderated, "moderator_PIN", roundup_option,
+                attended, "attendee_PIN",
+                recording, on_participant_join, on_participant_leave,
+                beep_on_participant_join,
+                announce_names, announce_names_settings,
+                initial_mute_state, service_provider, music_choice,
+                seminar, playback_only_line, disable_unmuting_star_six,
+                enable_multiple_moderators, prompt_mod_for_billing_code,
+                deleted
+            ) VALUES (
+                $1, $2, $3,
+                'D', $4, 'man',
+                'M', 'Please stand by.',
+                TRUE, $5, 'R',
+                FALSE, '',
+                FALSE, 'beep', 'beep',
+                TRUE,
+                FALSE, 2,
+                'normal', 'fs', 'genre',
+                FALSE, FALSE, FALSE,
+                FALSE, FALSE,
+                FALSE
+            ) RETURNING id""",
+            TEST_COMPANY_ID, fs_id, short, welcome_text, pin)
         print(f"==> nodebblclean: inserted bridges_bridge id={bridge_id} (PIN={pin})")
 
         # bridges_did — DID → bridge
