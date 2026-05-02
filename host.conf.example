@@ -30,9 +30,12 @@ BBL_SIGNALWIRE_TOKEN=
 
 # Backblaze B2 credentials for nightly recording archive.
 # Generate per-bucket scoped keys at https://secure.backblaze.com/app_keys.htm
-# Required perms: listFiles, readFiles, writeFiles on bucket bbl-fs-recordings
+# Required perms: listFiles, readFiles, writeFiles on the bucket below.
 BBL_B2_KEY_ID=
 BBL_B2_APP_KEY=
+# Bucket name your B2 key is scoped to. Default: bbl-fs-recordings.
+# Set explicitly if your existing key is scoped to a different name.
+BBL_B2_BUCKET=bbl-fs-recordings
 
 # ── OPTIONAL — defaults sufficient for typical BBL infra ─────────────
 

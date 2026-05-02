@@ -61,6 +61,17 @@ fi
 echo "==> Apply BBL overlay + render templates"
 "$CONFIG_DIR/scripts/apply-config.sh" "$BBL_HOST_CONF"
 
+# Remove vanilla sip_profiles BBL doesn't use. Both bind to the same
+# port range as BBL's external/client profiles and cause sofia
+# 'Address already in use' errors on FS 1.10.12+. fs-atl tolerated
+# them on 1.10.8 because vars.xml's $${internal_sip_port} was
+# undefined (silent skip); newer FS treats undefined as 5060 and
+# clashes with external. Cleanest fix: just drop them — BBL uses
+# external + client only.
+echo "==> Removing vestigial vanilla sip_profiles (internal, external-ipv6)"
+rm -f /etc/freeswitch/sip_profiles/internal.xml \
+      /etc/freeswitch/sip_profiles/external-ipv6.xml
+
 # CA bundle for mod_http_cache HTTPS downloads. http_cache.conf.xml
 # references $${certs_dir}/cacert.pem (resolves to /etc/freeswitch/tls/
 # cacert.pem). Without this file, every HTTPS GetDigits/playback URL

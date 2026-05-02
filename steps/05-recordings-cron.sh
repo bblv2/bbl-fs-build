@@ -9,6 +9,7 @@ set -euo pipefail
 # shellcheck disable=SC1091
 . "$BBL_HOST_CONF"
 : "${BBL_REC_PATH:=/opt/fs-qc-recordings}"
+: "${BBL_B2_BUCKET:=bbl-fs-recordings}"
 
 if [[ -z "${BBL_B2_KEY_ID:-}" || -z "${BBL_B2_APP_KEY:-}" ]]; then
     echo "WARN: BBL_B2_KEY_ID / BBL_B2_APP_KEY unset — skipping B2 push setup."
@@ -24,23 +25,22 @@ sed -e "s|__BBL_B2_KEY_ID__|${BBL_B2_KEY_ID}|" \
     > /root/.config/rclone/rclone.conf
 chmod 600 /root/.config/rclone/rclone.conf
 
-# Smoke-test creds — list buckets. If 'bbl-fs-recordings' doesn't
-# exist yet, create it (B2 keys with master scope can; scoped keys
-# can't and we'll surface a clear error).
-echo "==> Verify B2 access"
-if ! rclone --config /root/.config/rclone/rclone.conf lsd b2: >/dev/null 2>&1; then
-    echo "$0: B2 auth failed — check BBL_B2_KEY_ID / BBL_B2_APP_KEY" >&2
-    exit 1
-fi
-if ! rclone --config /root/.config/rclone/rclone.conf lsd b2:bbl-fs-recordings >/dev/null 2>&1; then
-    echo "==> Bucket bbl-fs-recordings not found; attempting create"
-    rclone --config /root/.config/rclone/rclone.conf mkdir b2:bbl-fs-recordings \
-        || { echo "$0: bucket missing and key cannot create — create it on B2 console first" >&2; exit 1; }
+# Smoke-test creds + bucket access. Scoped keys (recommended) often
+# can't list all buckets — but they CAN list inside their bucket.
+# So we test bucket access directly rather than listing all.
+echo "==> Verify B2 access to bucket: $BBL_B2_BUCKET"
+if ! rclone --config /root/.config/rclone/rclone.conf lsd "b2:${BBL_B2_BUCKET}" >/dev/null 2>&1; then
+    # Bucket doesn't exist OR key can't see it. Try create — succeeds for
+    # master-scoped keys, fails clearly for bucket-scoped keys.
+    echo "==> Bucket $BBL_B2_BUCKET inaccessible; attempting create"
+    rclone --config /root/.config/rclone/rclone.conf mkdir "b2:${BBL_B2_BUCKET}" \
+        || { echo "$0: cannot access or create bucket '$BBL_B2_BUCKET' — check key scope or create bucket on B2 console first" >&2; exit 1; }
 fi
 
 echo "==> Install push script + cron"
 install -d -m 755 /usr/local/sbin
-sed "s|__BBL_REC_PATH__|${BBL_REC_PATH}|g" \
+sed -e "s|__BBL_REC_PATH__|${BBL_REC_PATH}|g" \
+    -e "s|__BBL_B2_BUCKET__|${BBL_B2_BUCKET}|g" \
     "$BBL_BUILD_DIR/templates/bbl-fs-recordings-push.sh" \
     > /usr/local/sbin/bbl-fs-recordings-push.sh
 chmod 755 /usr/local/sbin/bbl-fs-recordings-push.sh

@@ -6,7 +6,7 @@
 set -euo pipefail
 
 REC_DIR="__BBL_REC_PATH__"
-BUCKET="bbl-fs-recordings"
+BUCKET="__BBL_B2_BUCKET__"
 HOST="$(hostname -f)"
 DATE_PARTITION="$(date -u -d 'yesterday' +%Y-%m-%d)"
 LOG_TAG="bbl-fs-recordings"

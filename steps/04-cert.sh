@@ -15,7 +15,10 @@ if [[ ! -d /etc/acme ]]; then
     echo "==> Installing acme.sh"
     apt-get install -y -q socat
     git clone --quiet https://github.com/acmesh-official/acme.sh.git /usr/src/acme
-    /usr/src/acme/acme.sh --install --home /etc/acme --accountemail "$CRT_EMAIL" >/dev/null
+    # acme.sh's installer uses CWD-relative `cp acme.sh ...` internally,
+    # so cd into the checkout before running --install or it fails with
+    # 'cp: cannot stat acme.sh: No such file or directory'.
+    (cd /usr/src/acme && ./acme.sh --install --home /etc/acme --accountemail "$CRT_EMAIL" >/dev/null)
 fi
 
 # Reload hook: assemble wss.pem from the renewed material, reload sofia
