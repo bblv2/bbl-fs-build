@@ -138,15 +138,13 @@ async def go(hostname: str) -> None:
                 "http://lb-atl.bblapp.io:8084/")
             print(f"==> nodebblclean: inserted bridges_freeswitchsetup id={fs_id}")
 
-        # bridges_bridge — full set of NOT-NULL columns (Django model has
-        # ~17 NOT NULL fields without defaults). Values mirror an existing
-        # working test bridge in nodebblclean (bridge 21 / test123 base).
-        # welcome_option='D' to avoid missing-upload silence.
+        # bridges_bridge — full NOT-NULL coverage. welcome_option='U'
+        # (uploaded) — even with no active welcome file (we add an inactive
+        # placeholder row below), chb-atl falls back to default audio URLs
+        # that DO play (default_welcome.mp3 + friendly_moderator_enjoy_music.mp3).
+        # welcome_option='D' would skip the welcome+music IVR entirely
+        # (verified empirically — caller hears only the PIN prompt).
         pin = gen_pin(4)
-        welcome_text = (
-            f"Welcome to bbl-fs-build test bridge {short}. "
-            "Your conference will begin shortly."
-        )
         bridge_id = await db.fetchval(
             """INSERT INTO bridges_bridge (
                 company_id, freeswitch_setup_id, title,
@@ -163,9 +161,9 @@ async def go(hostname: str) -> None:
                 deleted
             ) VALUES (
                 $1, $2, $3,
-                'D', $4, 'man',
+                'U', '', 'man',
                 'M', 'Please stand by.',
-                TRUE, $5, 'R',
+                TRUE, $4, 'R',
                 FALSE, '',
                 FALSE, 'beep', 'beep',
                 TRUE,
@@ -175,8 +173,17 @@ async def go(hostname: str) -> None:
                 FALSE, FALSE,
                 FALSE
             ) RETURNING id""",
-            TEST_COMPANY_ID, fs_id, short, welcome_text, pin)
+            TEST_COMPANY_ID, fs_id, short, pin)
         print(f"==> nodebblclean: inserted bridges_bridge id={bridge_id} (PIN={pin})")
+
+        # Inactive welcome-file placeholder. chb-atl looks for a 'W' file
+        # row to know it should fall back to default URLs (the inactive
+        # rows mark "use default audio" for the IVR layer).
+        await db.execute(
+            """INSERT INTO bridges_bridgefile
+               (bridge_id, file_type, file, active, "order", created)
+               VALUES ($1, 'W', 'files/default/default_welcome.mp3', FALSE, 0, NOW())""",
+            bridge_id)
 
         # bridges_did — DID → bridge ('primary' is a postgres reserved word, quote it)
         did_id = await db.fetchval(
