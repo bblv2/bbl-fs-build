@@ -75,7 +75,7 @@ async def go(hostname: str) -> None:
         "onnet_t38_passthrough_enabled": False,
         "inbound": {
             "ani_number_format": "+E.164",
-            "dnis_number_format": "+e.164",
+            "dnis_number_format": "+e164",
             "sip_subdomain_receive_settings": "from_anyone",
         },
     }
