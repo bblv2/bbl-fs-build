@@ -42,6 +42,13 @@ ufw allow 16384:32767/udp comment 'rtp'
 # briefly every 60 days)
 ufw allow 80/tcp comment 'acme http-01 challenge'
 
+# Inbound ESL on 8021 — needed for lb-atl to send ConferencePlay/Mute/
+# Kick/Deaf etc. to this FS host. Restricted to the same IPs the FS-side
+# esl_in ACL allows (defense-in-depth: ufw at the OS, ACL inside FS).
+# Without this rule, nudge / floor-event commands from lb-atl time out.
+ufw allow from 50.116.36.14 to any port 8021 proto tcp comment 'esl from lb-atl'
+ufw allow from 66.228.60.230 to any port 8021 proto tcp comment 'esl from rpt'
+
 # ICMP echo (ping) — debugging
 ufw default allow routed
 echo y | ufw enable
