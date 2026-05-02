@@ -9,16 +9,18 @@ set -euo pipefail
 CONFIRM=0
 HOSTNAME=
 SNAPSHOT=1
+HOST_CONF=
 for arg in "$@"; do
     case "$arg" in
         --confirm) CONFIRM=1 ;;
         --no-snapshot) SNAPSHOT=0 ;;
         hostname=*) HOSTNAME="${arg#hostname=}" ;;
+        host-conf=*) HOST_CONF="${arg#host-conf=}" ;;
         *) echo "unknown: $arg" >&2; exit 2 ;;
     esac
 done
 
-[[ -n "$HOSTNAME" ]] || { echo "usage: $0 hostname=<fqdn> --confirm [--no-snapshot]" >&2; exit 2; }
+[[ -n "$HOSTNAME" ]] || { echo "usage: $0 hostname=<fqdn> [host-conf=<path>] --confirm [--no-snapshot]" >&2; exit 2; }
 LABEL="${HOSTNAME//./-}"
 
 LID="$(linode-cli linodes list --label "$LABEL" --json 2>/dev/null | jq -r '.[0].id')"
@@ -31,6 +33,20 @@ if (( ! CONFIRM )); then
     echo "$0: not destroying without --confirm"
     exit 1
 fi
+
+# 0. Pre-delete: unregister from BBL infrastructure (best-effort)
+PY=/opt/bbl-call-tests/.venv/bin/python
+SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
+
+if [[ -n "$HOST_CONF" && -r "$HOST_CONF" ]]; then
+    echo "==> Unregistering beta-side bookings (DID, bridge, freeswitch_setup, Telnyx)"
+    "$PY" "$SCRIPTS/unregister.py" --hostname "$HOSTNAME" --host-conf "$HOST_CONF" || true
+else
+    echo "==> Skipping beta unregister (no --host-conf supplied)"
+fi
+
+echo "==> Disabling host in bbl-monitor"
+"$PY" "$SCRIPTS/unregister-monitor.py" --hostname "$HOSTNAME" || true
 
 # 1. Drain: shut down FS gracefully so in-flight calls aren't dropped
 # mid-conversation. fs_cli shutdown returns when all calls have ended.

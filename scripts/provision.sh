@@ -158,9 +158,39 @@ done
 
 echo "==> Done. Build summary:"
 ssh -o BatchMode=yes "root@$LINODE_IP" 'cat /etc/bbl-fs-build' || true
+
+# ── post-build registration steps (operator-side) ──────────────────
+PY=/opt/bbl-call-tests/.venv/bin/python
+SCRIPTS="$(cd "$(dirname "$0")" && pwd)"
+
+# 1. Always: register in bbl-monitor (every linode goes here)
 echo
-echo "==> Next:"
-echo "    1. Point DNS: ${ARGS[hostname]}  A  $LINODE_IP"
-echo "    2. Set up Floating IP (optional, for future re-provisions)"
-echo "    3. Register host in bbl-monitor: monitor_hosts table"
-echo "    4. Add to bbl-call-tests targets.py if running regression"
+echo "==> Registering ${ARGS[hostname]} in bbl-monitor"
+CPU_COUNT=$(ssh -o BatchMode=yes "root@$LINODE_IP" 'nproc' 2>/dev/null || echo 1)
+"$PY" "$SCRIPTS/register-monitor.py" \
+    --hostname "${ARGS[hostname]}" --cpu-count "$CPU_COUNT"
+
+# 2. role-specific registration
+if [[ "${ARGS[role]}" == "beta" ]]; then
+    echo
+    echo "==> Registering ${ARGS[hostname]} for beta testing (Telnyx + bridge + DID)"
+    REGOUT=$(mktemp)
+    "$PY" "$SCRIPTS/register.py" --hostname "${ARGS[hostname]}" | tee "$REGOUT"
+    # Append the persisted-IDs lines (they look like BBL_*=... after the
+    # printed "# Append to ..." marker) onto the operator's host.conf
+    if grep -q '^# Append to' "$REGOUT"; then
+        echo "" >> "${ARGS[host-conf]}"
+        echo "# bbl-fs-build register.py — written $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${ARGS[host-conf]}"
+        sed -n '/^# Append to/,$p' "$REGOUT" | grep -E '^BBL_' >> "${ARGS[host-conf]}"
+        echo "==> Persisted register IDs to ${ARGS[host-conf]}"
+    fi
+    rm -f "$REGOUT"
+elif [[ "${ARGS[role]}" == "prod" ]]; then
+    echo
+    echo "==> Role=prod: minimal registration only (bbl2022 freeswitch_setup)"
+    echo "    (register-prod.sh not yet implemented — add manually for now)"
+fi
+
+echo
+echo "==> Provision complete."
+echo "    Next: dial the Test DID printed above to verify end-to-end."
