@@ -61,6 +61,19 @@ fi
 echo "==> Apply BBL overlay + render templates"
 "$CONFIG_DIR/scripts/apply-config.sh" "$BBL_HOST_CONF"
 
+# CA bundle for mod_http_cache HTTPS downloads. http_cache.conf.xml
+# references $${certs_dir}/cacert.pem (resolves to /etc/freeswitch/tls/
+# cacert.pem). Without this file, every HTTPS GetDigits/playback URL
+# silently fails the TLS verify and the prompt is inaudible — the call
+# proceeds but callers hear nothing during welcome/PIN prompts.
+#
+# Symlink to the system bundle (managed by the ca-certificates package,
+# refreshed by OS updates) instead of fetching a stale snapshot.
+echo "==> Wiring CA bundle for mod_http_cache HTTPS"
+install -d -o freeswitch -g freeswitch -m 750 /etc/freeswitch/tls
+ln -sf /etc/ssl/certs/ca-certificates.crt /etc/freeswitch/tls/cacert.pem
+chown -h freeswitch:freeswitch /etc/freeswitch/tls/cacert.pem
+
 echo "==> Restart FreeSWITCH so systemd drop-in (script_dir, -rp) takes effect"
 systemctl daemon-reload
 systemctl enable freeswitch
