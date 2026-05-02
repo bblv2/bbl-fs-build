@@ -32,33 +32,33 @@ systemctl enable --now haveged
 systemctl enable --now chrony
 
 echo "==> SignalWire FreeSWITCH apt repo (deb12 / bookworm)"
-# SignalWire requires a free token to access their bookworm repos. The
-# token is read from /etc/bbl-fs-host.conf (or env) — operator obtains
-# from https://signalwire.com/ → Personal Access Token.
+# SignalWire requires a Personal Access Token (free) to access their
+# bookworm repos. The "open" files.freeswitch.org repo no longer
+# serves Debian 12 — they consolidated everything behind auth ~2022.
+# Get a token at https://signalwire.com/ → Personal Access Tokens.
 if [[ -r /etc/bbl-fs-host.conf ]]; then
     # shellcheck disable=SC1091
     . /etc/bbl-fs-host.conf
 fi
 if [[ -z "${BBL_SIGNALWIRE_TOKEN:-}" ]]; then
-    echo "WARN: BBL_SIGNALWIRE_TOKEN unset — using FreeSWITCH unsecured repo (fine for dev, NOT for prod)"
-    curl -fsSL https://files.freeswitch.org/repo/deb/debian-release/fsstretch-archive-keyring.asc \
-        | gpg --dearmor > /etc/apt/keyrings/freeswitch.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/freeswitch.gpg] http://files.freeswitch.org/repo/deb/debian-release/ bookworm main" \
-        > /etc/apt/sources.list.d/freeswitch.list
-else
-    install -d -m 700 /etc/apt/auth.conf.d
-    cat > /etc/apt/auth.conf.d/freeswitch.conf <<EOF
+    echo "FATAL: BBL_SIGNALWIRE_TOKEN unset" >&2
+    echo "       Required for FreeSWITCH apt access on Debian 12." >&2
+    echo "       Get one at https://signalwire.com → Personal Access Tokens" >&2
+    echo "       Then add BBL_SIGNALWIRE_TOKEN=pat_... to host.conf" >&2
+    exit 1
+fi
+install -d -m 755 /etc/apt/auth.conf.d
+cat > /etc/apt/auth.conf.d/freeswitch.conf <<EOF
 machine freeswitch.signalwire.com
 login signalwire
 password ${BBL_SIGNALWIRE_TOKEN}
 EOF
-    chmod 600 /etc/apt/auth.conf.d/freeswitch.conf
-    curl -fsSL --user "signalwire:${BBL_SIGNALWIRE_TOKEN}" \
-        https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg \
-        | gpg --dearmor > /etc/apt/keyrings/signalwire.gpg
-    echo "deb [signed-by=/etc/apt/keyrings/signalwire.gpg] https://freeswitch.signalwire.com/repo/deb/debian-release/ bookworm main" \
-        > /etc/apt/sources.list.d/freeswitch.list
-fi
+chmod 600 /etc/apt/auth.conf.d/freeswitch.conf
+curl -fsSL --user "signalwire:${BBL_SIGNALWIRE_TOKEN}" \
+    https://freeswitch.signalwire.com/repo/deb/debian-release/signalwire-freeswitch-repo.gpg \
+    | gpg --dearmor > /etc/apt/keyrings/signalwire.gpg
+echo "deb [signed-by=/etc/apt/keyrings/signalwire.gpg] https://freeswitch.signalwire.com/repo/deb/debian-release/ bookworm main" \
+    > /etc/apt/sources.list.d/freeswitch.list
 apt-get update -q
 
 echo "==> Kernel sysctls for high-RTP load"
