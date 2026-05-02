@@ -178,13 +178,13 @@ async def go(hostname: str) -> None:
             TEST_COMPANY_ID, fs_id, short, welcome_text, pin)
         print(f"==> nodebblclean: inserted bridges_bridge id={bridge_id} (PIN={pin})")
 
-        # bridges_did — DID → bridge
+        # bridges_did — DID → bridge ('primary' is a postgres reserved word, quote it)
         did_id = await db.fetchval(
-            "INSERT INTO bridges_did "
-            "(number, country_dial_code, country_iso_code, service_provider, "
-            "route_to_id, primary, billing_provider, deleted, delete_protection, toll_free) "
+            'INSERT INTO bridges_did '
+            '(number, country_dial_code, country_iso_code, service_provider, '
+            'route_to_id, "primary", billing_provider, deleted, delete_protection, toll_free) '
             "VALUES ($1, '1', 'US', 'fs', $2, TRUE, 'telnyx', FALSE, FALSE, FALSE) "
-            "RETURNING id",
+            'RETURNING id',
             did, bridge_id)
         print(f"==> nodebblclean: inserted bridges_did id={did_id}")
 
