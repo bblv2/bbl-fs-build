@@ -6,6 +6,11 @@
 # rollback window exists.
 set -euo pipefail
 
+OPERATOR_ENV="${BBL_OPERATOR_ENV:-/opt/bbl-call-tests/.env}"
+if [[ -r "$OPERATOR_ENV" ]]; then
+    set -a; . "$OPERATOR_ENV"; set +a
+fi
+
 CONFIRM=0
 HOSTNAME=
 SNAPSHOT=1

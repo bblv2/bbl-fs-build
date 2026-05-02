@@ -18,6 +18,14 @@
 #   5. Print a summary including SSH command to attach
 set -euo pipefail
 
+# Source operator-side env (BBL_MONITOR_DSN, TELNYX_API_KEY) needed by
+# register*.py. On rpt this lives at /opt/bbl-call-tests/.env. Override
+# via BBL_OPERATOR_ENV=/path/to/env if running from elsewhere.
+OPERATOR_ENV="${BBL_OPERATOR_ENV:-/opt/bbl-call-tests/.env}"
+if [[ -r "$OPERATOR_ENV" ]]; then
+    set -a; . "$OPERATOR_ENV"; set +a
+fi
+
 # ── Parse args ───────────────────────────────────────────────────────
 declare -A ARGS=( [role]= [size]= [hostname]= [host-conf]= [region]=us-southeast )
 for kv in "$@"; do
