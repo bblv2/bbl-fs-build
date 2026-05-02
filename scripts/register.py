@@ -140,20 +140,26 @@ async def go(hostname: str) -> None:
 
         # bridges_bridge — minimal Django-default-ish row, with a moderator PIN
         # so PIN flow can be tested. welcome_option='D' (default) to avoid
-        # missing-upload silence we hit on bridge 20.
+        # missing-upload silence we hit on bridge 20. welcome_text needs
+        # SOMETHING (NOT NULL constraint).
         pin = gen_pin(4)
+        welcome_text = (
+            f"Welcome to bbl-fs-build test bridge {short}. "
+            "Conference will begin shortly. Please enjoy some music."
+        )
         bridge_id = await db.fetchval(
             "INSERT INTO bridges_bridge "
             "(company_id, freeswitch_setup_id, title, moderated, \"moderator_PIN\", "
-            "attended, welcome_option, music_choice, robo_voice, on_participant_join, "
-            "on_participant_leave, beep_on_participant_join, deleted, announce_names, "
-            "announce_names_settings, initial_mute_state, seminar, "
-            "playback_only_line, disable_unmuting_star_six, enable_multiple_moderators, "
-            "service_provider) "
-            "VALUES ($1, $2, $3, TRUE, $4, FALSE, 'D', 'genre', 'man', 'beep', "
-            "'beep', TRUE, FALSE, FALSE, 2, 'normal', FALSE, FALSE, FALSE, FALSE, 'fs') "
+            "attended, welcome_option, welcome_text, music_choice, robo_voice, "
+            "on_participant_join, on_participant_leave, beep_on_participant_join, "
+            "deleted, announce_names, announce_names_settings, initial_mute_state, "
+            "seminar, playback_only_line, disable_unmuting_star_six, "
+            "enable_multiple_moderators, service_provider) "
+            "VALUES ($1, $2, $3, TRUE, $4, FALSE, 'D', $5, 'genre', 'man', "
+            "'beep', 'beep', TRUE, FALSE, FALSE, 2, 'normal', "
+            "FALSE, FALSE, FALSE, FALSE, 'fs') "
             "RETURNING id",
-            TEST_COMPANY_ID, fs_id, short, pin)
+            TEST_COMPANY_ID, fs_id, short, pin, welcome_text)
         print(f"==> nodebblclean: inserted bridges_bridge id={bridge_id} (PIN={pin})")
 
         # bridges_did — DID → bridge
