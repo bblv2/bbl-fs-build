@@ -38,11 +38,21 @@ CONFIG_REPO=${BBL_CONFIG_REPO:-git@github.com:bblv2/bbl-fs-config.git}
 CONFIG_BRANCH=${BBL_CONFIG_BRANCH:-main}
 CONFIG_DIR=/usr/src/bbl-fs-config
 
-echo "==> Cloning bbl-fs-config from $CONFIG_REPO"
-if [[ -d "$CONFIG_DIR/.git" ]]; then
-    git -C "$CONFIG_DIR" fetch --quiet
-    git -C "$CONFIG_DIR" reset --quiet --hard "origin/$CONFIG_BRANCH"
+echo "==> Acquiring bbl-fs-config"
+if [[ -f "$CONFIG_DIR/scripts/apply-config.sh" ]]; then
+    # Already present (e.g. rsynced from operator-side via provision.sh,
+    # since bbl-fs-config is private and the box has no GitHub SSH key).
+    # Try to git pull if the origin is HTTPS and reachable; otherwise
+    # use what's there.
+    if [[ -d "$CONFIG_DIR/.git" ]]; then
+        git -C "$CONFIG_DIR" fetch --quiet 2>/dev/null \
+            && git -C "$CONFIG_DIR" reset --quiet --hard "origin/$CONFIG_BRANCH" \
+            || echo "    (git fetch failed — using existing checkout as-is)"
+    else
+        echo "    using existing checkout (no .git, no remote sync attempted)"
+    fi
 else
+    echo "==> Cloning bbl-fs-config from $CONFIG_REPO"
     git clone --quiet --branch "$CONFIG_BRANCH" "$CONFIG_REPO" "$CONFIG_DIR"
 fi
 

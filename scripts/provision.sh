@@ -155,7 +155,31 @@ echo
 echo "==> Waiting for cloud-init to finish bbl-fs-build (~5 min)..."
 echo "    Tail with:  ssh root@$LINODE_IP tail -f /var/log/bbl-fs-build.log"
 
-# ── Don't proceed until we can SSH in ────────────────────────────────
+# ── Push bbl-fs-config to the new box BEFORE cloud-init's setup.sh
+#    needs it. The repo is private and the new box has no GitHub SSH
+#    key, so step 03-fs-config.sh would fail trying to clone it from
+#    GitHub. Wait for SSH to come up, then rsync from operators clone.
+LOCAL_CONFIG=${BBL_LOCAL_CONFIG_DIR:-/opt/bbl-fs/bbl-fs-config}
+echo "==> Waiting for SSH to come up on $LINODE_IP, then pushing bbl-fs-config"
+for _ in $(seq 1 30); do
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+        "root@$LINODE_IP" 'test -d /usr/src' 2>/dev/null; then
+        break
+    fi
+    sleep 5
+done
+if [[ -d "$LOCAL_CONFIG" ]]; then
+    # Pull latest first, then push to box. Step 03 detects the rsynced
+    # checkout and skips its git-fetch when GitHub SSH isnt available.
+    (cd "$LOCAL_CONFIG" && git pull --quiet 2>/dev/null || true)
+    rsync -az --delete -e "ssh -o BatchMode=yes" "$LOCAL_CONFIG/" \
+        "root@$LINODE_IP:/usr/src/bbl-fs-config/" 2>&1 | tail -3 || \
+            echo "    WARN: bbl-fs-config rsync failed; setup.sh step 03 may also fail"
+else
+    echo "    WARN: $LOCAL_CONFIG not on operator host; step 03 will try GitHub clone"
+fi
+
+# ── Don't proceed until /etc/bbl-fs-build appears (setup.sh has finished)
 for _ in $(seq 1 60); do
     if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
         "root@$LINODE_IP" 'test -f /etc/bbl-fs-build' 2>/dev/null; then
