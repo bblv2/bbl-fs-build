@@ -38,6 +38,7 @@ import requests
 TELNYX = "https://api.telnyx.com/v2"
 NODEBBLCLEAN_DSN_OVERRIDE = "/nodebblclean"
 TEST_COMPANY_ID = 1   # test123 (diego@rgs.mx)
+DEFAULT_PROMPT_SET_ID = 3   # 'drew' — has full prompt set including moderator_welcome
 
 
 def telnyx(method: str, path: str, **kwargs: Any) -> dict:
@@ -158,7 +159,7 @@ async def go(hostname: str) -> None:
                 initial_mute_state, service_provider, music_choice,
                 seminar, playback_only_line, disable_unmuting_star_six,
                 enable_multiple_moderators, prompt_mod_for_billing_code,
-                deleted
+                deleted, prompt_set_id
             ) VALUES (
                 $1, $2, $3,
                 'U', '', 'man',
@@ -171,9 +172,9 @@ async def go(hostname: str) -> None:
                 'normal', 'fs', 'com.twilio.music.soft-rock',
                 FALSE, FALSE, FALSE,
                 FALSE, FALSE,
-                FALSE
+                FALSE, $5
             ) RETURNING id""",
-            TEST_COMPANY_ID, fs_id, short, pin)
+            TEST_COMPANY_ID, fs_id, short, pin, DEFAULT_PROMPT_SET_ID)
         print(f"==> nodebblclean: inserted bridges_bridge id={bridge_id} (PIN={pin})")
 
         # Inactive welcome-file placeholder. chb-atl looks for a 'W' file
