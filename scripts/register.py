@@ -54,7 +54,15 @@ def resolve_ip(hostname: str) -> str:
     return socket.gethostbyname(hostname)
 
 
+# Use the same PIN as the mod_pin profile in fixtures.yaml, so the
+# load_with_quality scenario's drift check passes (it expects
+# moderator_pin='1111' for the mod_pin profile).
+DEFAULT_MODERATOR_PIN = "1111"
+
+
 def gen_pin(length: int = 4) -> str:
+    """Random N-digit string (kept for future use; default flows use
+    DEFAULT_MODERATOR_PIN to align with the mod_pin profile fixture)."""
     return "".join(random.choices(string.digits, k=length))
 
 
@@ -145,7 +153,7 @@ async def go(hostname: str) -> None:
         # that DO play (default_welcome.mp3 + friendly_moderator_enjoy_music.mp3).
         # welcome_option='D' would skip the welcome+music IVR entirely
         # (verified empirically — caller hears only the PIN prompt).
-        pin = gen_pin(4)
+        pin = DEFAULT_MODERATOR_PIN
         bridge_id = await db.fetchval(
             """INSERT INTO bridges_bridge (
                 company_id, freeswitch_setup_id, title,
