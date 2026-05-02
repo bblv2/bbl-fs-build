@@ -45,6 +45,10 @@ BBL_ESL_OUTBOUND=50.116.36.14:8085
 BBL_REC_PATH=/opt/fs-qc-recordings
 BBL_CERT_EMAIL=admin@brandedbridgeline.com
 
+# bbl-monitor ingest token. Default value matches the deployed
+# crawl.rgs.mx:8765/monitor/ingest endpoint; only override if rotated.
+BBL_MONITOR_TOKEN=mcp-monitor-2026
+
 # Optional override of where bbl-fs-config lives (e.g., for testing
 # a config branch before merging to main):
 # BBL_CONFIG_REPO=git@github.com:bblv2/bbl-fs-config.git

@@ -61,6 +61,9 @@ The provision script will print:
 05-recordings-cron  rclone config from B2 creds, smoke-test bucket, install
                     nightly /etc/cron.d push job + logrotate
 06-firewall.sh      ufw rules: SSH/SIP/RTP/WSS only; everything else dropped
+06b-monitor-collector.sh
+                    Install /usr/local/bin/mcp-collector.sh + /etc/cron.d entry;
+                    box auto-appears on https://monitor.rpt.bblapp.io/servers
 07-finalize.sh      Write /etc/bbl-fs-build, render motd, sanity checks
 ```
 
