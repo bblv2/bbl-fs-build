@@ -169,12 +169,16 @@ for _ in $(seq 1 30); do
     sleep 5
 done
 if [[ -d "$LOCAL_CONFIG" ]]; then
-    # Pull latest first, then push to box. Step 03 detects the rsynced
-    # checkout and skips its git-fetch when GitHub SSH isnt available.
+    # Pull latest first, then push to box. Use tar-over-ssh instead of
+    # rsync because rsync isn't installed on the freshly-booted box yet
+    # (it comes in step 01). Tar-over-ssh works with just ssh + tar
+    # (both present in stock debian12). Step 03 detects the existing
+    # checkout and skips its git-fetch when GitHub SSH isn't available.
     (cd "$LOCAL_CONFIG" && git pull --quiet 2>/dev/null || true)
-    rsync -az --delete -e "ssh -o BatchMode=yes" "$LOCAL_CONFIG/" \
-        "root@$LINODE_IP:/usr/src/bbl-fs-config/" 2>&1 | tail -3 || \
-            echo "    WARN: bbl-fs-config rsync failed; setup.sh step 03 may also fail"
+    ssh -o BatchMode=yes "root@$LINODE_IP" "mkdir -p /usr/src/bbl-fs-config && rm -rf /usr/src/bbl-fs-config/*"
+    tar -C "$LOCAL_CONFIG" -cf - . | \
+        ssh -o BatchMode=yes "root@$LINODE_IP" "tar -C /usr/src/bbl-fs-config -xf -" || \
+            echo "    WARN: bbl-fs-config tar push failed; setup.sh step 03 may also fail"
 else
     echo "    WARN: $LOCAL_CONFIG not on operator host; step 03 will try GitHub clone"
 fi
