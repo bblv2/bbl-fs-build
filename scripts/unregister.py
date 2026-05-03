@@ -167,15 +167,29 @@ def _auto_env() -> None:
 
 def _resolve_host_conf(hostname: str) -> str | None:
     """Find the operator-side per-host conf for `hostname`. Tries the
-    `/etc/bbl-fs-<short>.host.conf` convention plus the legacy
-    `/etc/bbl-fs-<fqdn>.host.conf` shape used by some pre-2026-05
-    builds. Returns the path if found, else None.
+    canonical `/etc/bbl-fs-<short>.host.conf` path first (current
+    convention), then falls back to globbing /etc/bbl-fs-*.host.conf
+    and matching by `BBL_DOMAIN=<hostname>` — the only field guaranteed
+    to be present and unambiguous, regardless of which prefix style
+    the file was named with (fs-test-1/2/3 used a single-prefix
+    convention; fs-test-9 onward uses the doubled prefix).
     """
+    import glob
     short = hostname.split(".", 1)[0]
+    # Fast path: canonical naming.
     for candidate in (f"/etc/bbl-fs-{short}.host.conf",
                       f"/etc/bbl-fs-{hostname}.host.conf"):
         if Path(candidate).is_file():
             return candidate
+    # Slow path: scan all per-host confs for matching BBL_DOMAIN.
+    # Excludes /etc/bbl-fs.host.conf (shared secrets, no BBL_DOMAIN).
+    for path in glob.glob("/etc/bbl-fs-*.host.conf"):
+        try:
+            conf = parse_host_conf(Path(path))
+        except Exception:
+            continue
+        if conf.get("BBL_DOMAIN") == hostname:
+            return path
     return None
 
 
