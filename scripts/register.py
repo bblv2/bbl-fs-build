@@ -3,23 +3,37 @@
 register.py role=beta — wire up a freshly-built BETA FS box for end-to-end
 test calls.
 
+Allocates TWO DIDs from bbl_test_did_pool:
+  - role='primary'   for the main test bridge (load callers + moderator)
+  - role='adjacent'  for the cross-bridge audio-quality check in
+                      load_with_quality (a second mod_conference on the
+                      same FS host so we can verify a load on bridge A
+                      doesn't degrade audio on adjacent bridge B)
+
+Both DIDs are pointed at the same Telnyx IP connection AND attached to
+bridges with the same freeswitch_setup_id, so both calls land on the
+new FS host.
+
 Steps:
   1. Resolve box IP from DNS (hostname → A record)
   2. Telnyx: create per-box IP-typed SIP connection, dest=<box_ip>:5060
-  3. Pool: pick lowest unassigned pool-did-* from bbl_test_did_pool
-  4. Telnyx: assign that DID to the new connection
-  5. nodebblclean: INSERT bridges_freeswitchsetup row for the box
-  6. nodebblclean: INSERT bridges_bridge (company=1 test123, defaults,
-     welcome_option='D' to avoid missing-upload silence, moderator_PIN
-     auto-generated)
-  7. nodebblclean: INSERT bridges_did linking DID → new bridge
-  8. Mark pool DID as assigned_to=<hostname>
+  3. Pool: atomically pick TWO lowest unassigned pool-did-* slots,
+     mark roles primary + adjacent
+  4. Telnyx: PATCH each DID → connection_id
+  5. nodebblclean: INSERT bridges_freeswitchsetup row for the box (once)
+  6. nodebblclean: INSERT bridges_bridge × 2 (titles `<short>` and
+     `<short>-adj`), both sharing freeswitch_setup_id
+  7. nodebblclean: INSERT bridges_bridgefile placeholders × 2
+  8. nodebblclean: INSERT bridges_did × 2 linking each DID → its bridge
   9. Print: dial <DID>, mod PIN <PIN>, plus IDs to persist into host.conf
 
 Env required:
   BBL_MONITOR_DSN              postgres://... (for nodebblclean access via repo)
   TELNYX_API_KEY               Telnyx Mission Control API token
   TELNYX_OUTBOUND_PROFILE_ID   (optional) outbound voice profile to attach
+
+Pool capacity: needs 2 unassigned rows in bbl_test_did_pool. Mint more
+Telnyx numbers in the same range when this gets tight.
 """
 from __future__ import annotations
 import argparse
@@ -66,6 +80,52 @@ def gen_pin(length: int = 4) -> str:
     return "".join(random.choices(string.digits, k=length))
 
 
+async def _insert_bridge(db, fs_id: int, title: str, pin: str) -> int:
+    """Insert one bridges_bridge row and return its id."""
+    return await db.fetchval(
+        """INSERT INTO bridges_bridge (
+            company_id, freeswitch_setup_id, title,
+            welcome_option, welcome_text, robo_voice,
+            hold_option, hold_text,
+            moderated, "moderator_PIN", roundup_option,
+            attended, "attendee_PIN",
+            recording, on_participant_join, on_participant_leave,
+            beep_on_participant_join,
+            announce_names, announce_names_settings,
+            initial_mute_state, service_provider, music_choice,
+            seminar, playback_only_line, disable_unmuting_star_six,
+            enable_multiple_moderators, prompt_mod_for_billing_code,
+            deleted, prompt_set_id
+        ) VALUES (
+            $1, $2, $3,
+            'U', '', 'man',
+            'M', 'Please stand by.',
+            TRUE, $4, 'R',
+            FALSE, '',
+            FALSE, 'beep', 'beep',
+            TRUE,
+            FALSE, 2,
+            'normal', 'fs', 'com.twilio.music.soft-rock',
+            FALSE, FALSE, FALSE,
+            FALSE, FALSE,
+            FALSE, $5
+        ) RETURNING id""",
+        TEST_COMPANY_ID, fs_id, title, pin, DEFAULT_PROMPT_SET_ID)
+
+
+async def _insert_bridges_did(db, did: str, bridge_id: int) -> int:
+    """Insert a bridges_did row routing `did` → `bridge_id`. Returns the
+    new row id. ('primary' is a postgres reserved word; quote it.)"""
+    return await db.fetchval(
+        'INSERT INTO bridges_did '
+        '(number, country_dial_code, country_iso_code, service_provider, '
+        'route_to_id, "primary", billing_provider, deleted, delete_protection, '
+        'toll_free, created) '
+        "VALUES ($1, '1', 'US', 'fs', $2, TRUE, 'telnyx', FALSE, FALSE, FALSE, NOW()) "
+        'RETURNING id',
+        did, bridge_id)
+
+
 async def go(hostname: str) -> None:
     dsn = os.environ["BBL_MONITOR_DSN"].replace("/bbl2022", NODEBBLCLEAN_DSN_OVERRIDE)
     box_ip = resolve_ip(hostname)
@@ -97,32 +157,55 @@ async def go(hostname: str) -> None:
     ip_body = {"connection_id": connection_id, "ip_address": box_ip, "port": 5060}
     telnyx("POST", "/ips", json=ip_body)
 
-    # 2. Pool: pick a DID
-    print(f"==> Pool: selecting unassigned DID")
+    # 2. Pool: atomically allocate primary + adjacent DIDs.
+    # Both succeed or both roll back — partial assignment would leave
+    # an orphan pool row that humans would have to clean up.
+    print(f"==> Pool: allocating primary + adjacent DIDs")
     pool_conn = await asyncpg.connect(dsn)
     try:
         async with pool_conn.transaction():
-            row = await pool_conn.fetchrow(
+            primary_row = await pool_conn.fetchrow(
                 "SELECT pool_name, did FROM bbl_test_did_pool "
                 "WHERE assigned_to IS NULL ORDER BY pool_name LIMIT 1 FOR UPDATE")
-            if not row:
-                sys.exit("Pool exhausted — all DIDs assigned. Add more or unregister stale boxes.")
-            pool_name, did = row["pool_name"], row["did"]
+            if not primary_row:
+                sys.exit("Pool exhausted — no unassigned DIDs for primary. "
+                         "Mint more Telnyx DIDs or unregister stale boxes.")
+            primary_pool_name = primary_row["pool_name"]
+            primary_did = primary_row["did"]
             await pool_conn.execute(
-                "UPDATE bbl_test_did_pool SET assigned_to = $1, assigned_at = NOW() "
-                "WHERE pool_name = $2", hostname, pool_name)
-        print(f"    selected {pool_name} = {did}")
+                "UPDATE bbl_test_did_pool "
+                "SET assigned_to = $1, assigned_at = NOW(), role = 'primary' "
+                "WHERE pool_name = $2", hostname, primary_pool_name)
+
+            adjacent_row = await pool_conn.fetchrow(
+                "SELECT pool_name, did FROM bbl_test_did_pool "
+                "WHERE assigned_to IS NULL ORDER BY pool_name LIMIT 1 FOR UPDATE")
+            if not adjacent_row:
+                sys.exit("Pool exhausted — only one unassigned DID, need two "
+                         "(primary + adjacent). Mint more Telnyx DIDs.")
+            adjacent_pool_name = adjacent_row["pool_name"]
+            adjacent_did = adjacent_row["did"]
+            await pool_conn.execute(
+                "UPDATE bbl_test_did_pool "
+                "SET assigned_to = $1, assigned_at = NOW(), role = 'adjacent' "
+                "WHERE pool_name = $2", hostname, adjacent_pool_name)
+        print(f"    primary:  {primary_pool_name} = {primary_did}")
+        print(f"    adjacent: {adjacent_pool_name} = {adjacent_did}")
     finally:
         await pool_conn.close()
 
-    # 3. Telnyx: find that DID, point it at the new connection
-    print(f"==> Telnyx: assigning {did} to connection")
-    n_resp = telnyx("GET", f"/phone_numbers?filter[phone_number]={did}")
-    if not n_resp.get("data"):
-        sys.exit(f"DID {did} not found in Telnyx — check pool table matches Telnyx state")
-    number_id = n_resp["data"][0]["id"]
-    telnyx("PATCH", f"/phone_numbers/{number_id}/voice",
-           json={"connection_id": connection_id})
+    # 3. Telnyx: point each DID at the new connection. Failure here
+    # leaves the pool rows allocated; operator would need to release
+    # them via unregister.py if the build aborts.
+    for label, did_value in (("primary", primary_did), ("adjacent", adjacent_did)):
+        print(f"==> Telnyx: assigning {did_value} ({label}) to connection")
+        n_resp = telnyx("GET", f"/phone_numbers?filter[phone_number]={did_value}")
+        if not n_resp.get("data"):
+            sys.exit(f"DID {did_value} ({label}) not found in Telnyx — "
+                     f"check pool table matches Telnyx state")
+        number_id = n_resp["data"][0]["id"]
+        telnyx("PATCH", f"/phone_numbers/{number_id}/voice",
+               json={"connection_id": connection_id})
 
     # 4-6. nodebblclean: freeswitch_setup + bridge + did
     db = await asyncpg.connect(dsn)
@@ -147,63 +230,38 @@ async def go(hostname: str) -> None:
                 "http://lb-atl.bblapp.io:8084/")
             print(f"==> nodebblclean: inserted bridges_freeswitchsetup id={fs_id}")
 
-        # bridges_bridge — full NOT-NULL coverage. welcome_option='U'
-        # (uploaded) — even with no active welcome file (we add an inactive
-        # placeholder row below), chb-atl falls back to default audio URLs
-        # that DO play (default_welcome.mp3 + friendly_moderator_enjoy_music.mp3).
-        # welcome_option='D' would skip the welcome+music IVR entirely
-        # (verified empirically — caller hears only the PIN prompt).
+        # bridges_bridge × 2 — same freeswitch_setup_id so both bridges
+        # land on this FS host. Title `<short>-adj` distinguishes the
+        # adjacent bridge in the Django admin / monitor UIs.
+        # welcome_option='U' (uploaded) — even with no active welcome file
+        # (we add an inactive placeholder row below), chb-atl falls back
+        # to default audio URLs that DO play. welcome_option='D' would
+        # skip the welcome+music IVR entirely (verified empirically —
+        # caller hears only the PIN prompt).
         pin = DEFAULT_MODERATOR_PIN
-        bridge_id = await db.fetchval(
-            """INSERT INTO bridges_bridge (
-                company_id, freeswitch_setup_id, title,
-                welcome_option, welcome_text, robo_voice,
-                hold_option, hold_text,
-                moderated, "moderator_PIN", roundup_option,
-                attended, "attendee_PIN",
-                recording, on_participant_join, on_participant_leave,
-                beep_on_participant_join,
-                announce_names, announce_names_settings,
-                initial_mute_state, service_provider, music_choice,
-                seminar, playback_only_line, disable_unmuting_star_six,
-                enable_multiple_moderators, prompt_mod_for_billing_code,
-                deleted, prompt_set_id
-            ) VALUES (
-                $1, $2, $3,
-                'U', '', 'man',
-                'M', 'Please stand by.',
-                TRUE, $4, 'R',
-                FALSE, '',
-                FALSE, 'beep', 'beep',
-                TRUE,
-                FALSE, 2,
-                'normal', 'fs', 'com.twilio.music.soft-rock',
-                FALSE, FALSE, FALSE,
-                FALSE, FALSE,
-                FALSE, $5
-            ) RETURNING id""",
-            TEST_COMPANY_ID, fs_id, short, pin, DEFAULT_PROMPT_SET_ID)
-        print(f"==> nodebblclean: inserted bridges_bridge id={bridge_id} (PIN={pin})")
+        primary_bridge_id = await _insert_bridge(db, fs_id, short, pin)
+        print(f"==> nodebblclean: inserted bridges_bridge id={primary_bridge_id} "
+              f"(primary, PIN={pin})")
+        adjacent_bridge_id = await _insert_bridge(db, fs_id, f"{short}-adj", pin)
+        print(f"==> nodebblclean: inserted bridges_bridge id={adjacent_bridge_id} "
+              f"(adjacent, PIN={pin})")
 
-        # Inactive welcome-file placeholder. chb-atl looks for a 'W' file
-        # row to know it should fall back to default URLs (the inactive
-        # rows mark "use default audio" for the IVR layer).
-        await db.execute(
-            """INSERT INTO bridges_bridgefile
-               (bridge_id, file_type, file, active, "order", created)
-               VALUES ($1, 'W', 'files/default/default_welcome.mp3', FALSE, 0, NOW())""",
-            bridge_id)
+        # Inactive welcome-file placeholder for both bridges. chb-atl
+        # looks for a 'W' file row to know it should fall back to default
+        # URLs (inactive rows mark "use default audio" for the IVR layer).
+        for b_id in (primary_bridge_id, adjacent_bridge_id):
+            await db.execute(
+                """INSERT INTO bridges_bridgefile
+                   (bridge_id, file_type, file, active, "order", created)
+                   VALUES ($1, 'W', 'files/default/default_welcome.mp3', FALSE, 0, NOW())""",
+                b_id)
 
-        # bridges_did — DID → bridge ('primary' is a postgres reserved word, quote it)
-        did_id = await db.fetchval(
-            'INSERT INTO bridges_did '
-            '(number, country_dial_code, country_iso_code, service_provider, '
-            'route_to_id, "primary", billing_provider, deleted, delete_protection, '
-            'toll_free, created) '
-            "VALUES ($1, '1', 'US', 'fs', $2, TRUE, 'telnyx', FALSE, FALSE, FALSE, NOW()) "
-            'RETURNING id',
-            did, bridge_id)
-        print(f"==> nodebblclean: inserted bridges_did id={did_id}")
+        # bridges_did × 2 — each DID → its own bridge.
+        # ('primary' is a postgres reserved word in the column name; quote it.)
+        primary_did_row_id = await _insert_bridges_did(db, primary_did, primary_bridge_id)
+        print(f"==> nodebblclean: inserted bridges_did id={primary_did_row_id} (primary)")
+        adjacent_did_row_id = await _insert_bridges_did(db, adjacent_did, adjacent_bridge_id)
+        print(f"==> nodebblclean: inserted bridges_did id={adjacent_did_row_id} (adjacent)")
 
     finally:
         await db.close()
@@ -212,20 +270,24 @@ async def go(hostname: str) -> None:
     print()
     print("─" * 60)
     print("✓ Beta box registered. Test ready.")
-    print(f"  Dial:        {did}")
-    print(f"  Mod PIN:     {pin}")
-    print(f"  Connection:  {connection_id}")
-    print(f"  FS setup id: {fs_id}")
-    print(f"  Bridge id:   {bridge_id}")
-    print(f"  Pool slot:   {pool_name}")
+    print(f"  Dial (primary):  {primary_did}")
+    print(f"  Adjacent DID:    {adjacent_did}   (load_with_quality cross-bridge)")
+    print(f"  Mod PIN:         {pin}")
+    print(f"  Connection:      {connection_id}")
+    print(f"  FS setup id:     {fs_id}")
+    print(f"  Primary bridge:  id={primary_bridge_id}  pool={primary_pool_name}")
+    print(f"  Adjacent bridge: id={adjacent_bridge_id}  pool={adjacent_pool_name}")
     print()
     print("# Append to /etc/bbl-fs-host.conf (operator side):")
     print(f"BBL_TELNYX_CONNECTION_ID={connection_id}")
-    print(f"BBL_TEST_DID={did}")
+    print(f"BBL_TEST_DID={primary_did}")
     print(f"BBL_TEST_PIN={pin}")
-    print(f"BBL_TEST_BRIDGE_ID={bridge_id}")
+    print(f"BBL_TEST_BRIDGE_ID={primary_bridge_id}")
     print(f"BBL_TEST_FS_SETUP_ID={fs_id}")
-    print(f"BBL_TEST_DID_POOL_NAME={pool_name}")
+    print(f"BBL_TEST_DID_POOL_NAME={primary_pool_name}")
+    print(f"BBL_TEST_ADJ_DID={adjacent_did}")
+    print(f"BBL_TEST_ADJ_BRIDGE_ID={adjacent_bridge_id}")
+    print(f"BBL_TEST_DID_POOL_NAME_ADJ={adjacent_pool_name}")
 
 
 if __name__ == "__main__":
