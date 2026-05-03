@@ -25,17 +25,21 @@ Pick the size that matches your expected load. The build is identical across siz
 
 ```bash
 # 1. Prerequisites (one-time on operator's machine)
-brew install linode-cli jq         # macOS
-linode-cli configure                # paste API token
-cp host.conf.example /tmp/fs-beta-1.host.conf
-$EDITOR /tmp/fs-beta-1.host.conf    # fill in BBL_EXTERNAL_IP, BBL_DOMAIN, secrets
+brew install linode-cli jq                # macOS
+linode-cli configure                       # paste API token
+sudo cp host.conf.example /etc/bbl-fs.host.conf
+sudo $EDITOR /etc/bbl-fs.host.conf         # fill in shared secrets only
+                                           # (no BBL_DOMAIN, no BBL_EXTERNAL_IP)
 
-# 2. Provision
+# 2. Provision (host-conf is auto-derived per-host)
 ./scripts/provision.sh \
     role=beta \
     size=small \
-    hostname=fs-beta-1.bblapp.io \
-    host-conf=/tmp/fs-beta-1.host.conf
+    hostname=fs-beta-1.bblapp.io
+
+# Pass host-conf=<path> only as an escape hatch — by default the script
+# creates /etc/bbl-fs-<short>.host.conf from /etc/bbl-fs.host.conf with
+# BBL_DOMAIN auto-set, and persists register.py IDs there for teardown.
 
 # 3. Wait 5 min, tail /var/log/bbl-fs-build.log on the new box if you want
 ssh root@<linode-ip> tail -f /var/log/bbl-fs-build.log

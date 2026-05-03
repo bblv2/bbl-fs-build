@@ -28,6 +28,17 @@ done
 [[ -n "$HOSTNAME" ]] || { echo "usage: $0 hostname=<fqdn> [host-conf=<path>] --confirm [--no-snapshot]" >&2; exit 2; }
 LABEL="${HOSTNAME//./-}"
 
+# host-conf default: /etc/bbl-fs-<short>.host.conf (where provision.sh
+# persisted register.py IDs). Skip silently if absent — happens for
+# prod boxes (no register IDs to roll back) and pre-2026-05 builds.
+if [[ -z "$HOST_CONF" ]]; then
+    DEFAULT_HOST_CONF="/etc/bbl-fs-${HOSTNAME%%.*}.host.conf"
+    if [[ -r "$DEFAULT_HOST_CONF" ]]; then
+        HOST_CONF="$DEFAULT_HOST_CONF"
+        echo "==> Using $HOST_CONF for unregister"
+    fi
+fi
+
 LID="$(linode-cli linodes list --label "$LABEL" --json 2>/dev/null | jq -r '.[0].id')"
 [[ -n "$LID" && "$LID" != "null" ]] || { echo "$0: no linode with label '$LABEL'" >&2; exit 1; }
 
@@ -97,6 +108,16 @@ if [[ -n "$ZONE_ID" ]]; then
         echo "==> Removing DNS A record ($SUBDOMAIN.$ROOT_DOMAIN, ID $REC_ID)"
         linode-cli domains records-delete "$ZONE_ID" "$REC_ID" >/dev/null
     fi
+fi
+
+# 5. Remove the auto-derived per-host conf so a future re-spawn with
+#    the same hostname doesn't reuse stale register IDs. Only delete
+#    if it matches the auto-derive convention; never touch an
+#    operator-supplied host-conf path.
+DEFAULT_HOST_CONF="/etc/bbl-fs-${HOSTNAME%%.*}.host.conf"
+if [[ "$HOST_CONF" == "$DEFAULT_HOST_CONF" && -f "$HOST_CONF" ]]; then
+    echo "==> Removing per-host conf $HOST_CONF"
+    rm -f "$HOST_CONF"
 fi
 
 echo

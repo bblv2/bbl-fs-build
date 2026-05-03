@@ -2,20 +2,19 @@
 # provision.sh — create a new FreeSWITCH Linode using bbl-fs-build.
 #
 # Usage:
-#   scripts/provision.sh role=beta  size=small  hostname=fs-beta-1.bblapp.io
-#   scripts/provision.sh role=prod  size=large  hostname=fs-atl-2.bblapp.io
+#   scripts/provision.sh role=beta size=medium hostname=fs-test-4.bblapp.io
+#   scripts/provision.sh role=prod size=large  hostname=fs-atl-2.bblapp.io
+#
+# host-conf= is optional. If omitted, the script reads shared secrets
+# from /etc/bbl-fs.host.conf, derives a per-host file at
+# /etc/bbl-fs-<short>.host.conf with BBL_DOMAIN auto-set from hostname=,
+# and persists register.py IDs there. Operators no longer need to copy
+# the previous host's conf file forward by hand.
 #
 # Prerequisites:
 #   - linode-cli installed and authenticated (`linode-cli configure`)
-#   - host.conf prepared with secrets (BBL_B2_KEY_ID, BBL_B2_APP_KEY,
-#     BBL_SIGNALWIRE_TOKEN). Pass via --host-conf=/path/to/host.conf
-#
-# Workflow:
-#   1. Resolve size → Linode SKU
-#   2. Reserve a Floating IP (so we can re-provision without DNS dance)
-#   3. linode-cli linodes create … --metadata.user_data=$(base64 bootstrap.sh + env)
-#   4. Wait for cloud-init to finish; tail /var/log/bbl-fs-build.log
-#   5. Print a summary including SSH command to attach
+#   - /etc/bbl-fs.host.conf populated once with BBL_B2_*, BBL_SIGNALWIRE_TOKEN,
+#     BBL_CERT_EMAIL, etc. (see host.conf.example for the field list).
 set -euo pipefail
 
 # Source operator-side env (BBL_MONITOR_DSN, TELNYX_API_KEY) needed by
@@ -34,10 +33,52 @@ for kv in "$@"; do
     [[ -n "${ARGS[$k]+_}" ]] || { echo "unknown arg: $k" >&2; exit 2; }
     ARGS[$k]="$v"
 done
-for required in role size hostname host-conf; do
+for required in role size hostname; do
     [[ -n "${ARGS[$required]}" ]] || { echo "$0: $required is required" >&2; exit 2; }
 done
-[[ -r "${ARGS[host-conf]}" ]] || { echo "$0: cannot read ${ARGS[host-conf]}" >&2; exit 2; }
+
+# ── Resolve host.conf ────────────────────────────────────────────────
+# If host-conf= is supplied, use it verbatim (escape hatch for one-offs).
+# Otherwise: per-host file lives at /etc/bbl-fs-<short>.host.conf and is
+# auto-derived from the shared secrets file at /etc/bbl-fs.host.conf on
+# first provision. Re-provisions reuse the existing per-host file so
+# register.py IDs persist across runs.
+SHORT_HOST="${ARGS[hostname]%%.*}"
+PER_HOST_CONF="/etc/bbl-fs-${SHORT_HOST}.host.conf"
+SHARED_CONF="${BBL_FS_SHARED_CONF:-/etc/bbl-fs.host.conf}"
+
+if [[ -n "${ARGS[host-conf]}" ]]; then
+    HOST_CONF="${ARGS[host-conf]}"
+    [[ -r "$HOST_CONF" ]] || { echo "$0: cannot read $HOST_CONF" >&2; exit 2; }
+elif [[ -r "$PER_HOST_CONF" ]]; then
+    HOST_CONF="$PER_HOST_CONF"
+    echo "==> Reusing existing per-host conf: $HOST_CONF"
+elif [[ -r "$SHARED_CONF" ]]; then
+    echo "==> Creating $PER_HOST_CONF from $SHARED_CONF (BBL_DOMAIN=${ARGS[hostname]})"
+    install -m 0600 /dev/null "$PER_HOST_CONF"
+    cat "$SHARED_CONF" >> "$PER_HOST_CONF"
+    if grep -q '^BBL_DOMAIN=' "$PER_HOST_CONF"; then
+        sed -i "s|^BBL_DOMAIN=.*|BBL_DOMAIN=${ARGS[hostname]}|" "$PER_HOST_CONF"
+    else
+        echo "BBL_DOMAIN=${ARGS[hostname]}" >> "$PER_HOST_CONF"
+    fi
+    HOST_CONF="$PER_HOST_CONF"
+else
+    echo "$0: no host-conf= supplied and neither $PER_HOST_CONF nor $SHARED_CONF exists." >&2
+    echo "    Populate $SHARED_CONF once (cp host.conf.example) and re-run." >&2
+    exit 2
+fi
+
+# Sanity: BBL_DOMAIN in the host.conf must match hostname=, or the box
+# identifies itself as something else (wrong TLS cert FQDN, wrong
+# Telnyx connection, etc.). Bit fs-test-4 on 2026-05-02 when an
+# fs-test-3 host.conf was reused.
+EXISTING_DOMAIN="$(awk -F= '/^BBL_DOMAIN=/{print $2; exit}' "$HOST_CONF" | tr -d ' \r')"
+if [[ -n "$EXISTING_DOMAIN" && "$EXISTING_DOMAIN" != "${ARGS[hostname]}" ]]; then
+    echo "$0: BBL_DOMAIN in $HOST_CONF is '$EXISTING_DOMAIN' but hostname= is '${ARGS[hostname]}'." >&2
+    echo "    Fix the conf, or omit host-conf= to auto-derive." >&2
+    exit 2
+fi
 
 # ── Resolve size → SKU ───────────────────────────────────────────────
 BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
@@ -88,7 +129,7 @@ write_files:
     permissions: '0600'
     owner: root:root
     content: |
-$(sed 's/^/      /' "${ARGS[host-conf]}")
+$(sed 's/^/      /' "$HOST_CONF")
   - path: /etc/bbl-fs-bootstrap.env
     permissions: '0644'
     content: |
@@ -215,10 +256,10 @@ if [[ "${ARGS[role]}" == "beta" ]]; then
     # Append the persisted-IDs lines (they look like BBL_*=... after the
     # printed "# Append to ..." marker) onto the operator's host.conf
     if grep -q '^# Append to' "$REGOUT"; then
-        echo "" >> "${ARGS[host-conf]}"
-        echo "# bbl-fs-build register.py — written $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "${ARGS[host-conf]}"
-        sed -n '/^# Append to/,$p' "$REGOUT" | grep -E '^BBL_' >> "${ARGS[host-conf]}"
-        echo "==> Persisted register IDs to ${ARGS[host-conf]}"
+        echo "" >> "$HOST_CONF"
+        echo "# bbl-fs-build register.py — written $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HOST_CONF"
+        sed -n '/^# Append to/,$p' "$REGOUT" | grep -E '^BBL_' >> "$HOST_CONF"
+        echo "==> Persisted register IDs to $HOST_CONF"
     fi
     rm -f "$REGOUT"
 elif [[ "${ARGS[role]}" == "prod" ]]; then
