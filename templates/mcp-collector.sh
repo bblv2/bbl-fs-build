@@ -1,7 +1,12 @@
 #!/bin/bash
-# MCP Server Metrics Collector
-# Deploy to each monitored host, run every 5 min via cron:
+# MCP Server Metrics Collector — FreeSWITCH variant (includes calls_in_progress)
+# Deploy to each monitored FS host, run every 5 min via cron:
 # */5 * * * * MONITOR_TOKEN=mcp-monitor-2026 /usr/local/bin/mcp-collector.sh
+#
+# `calls_in_progress` is what bbl-monitor's /load page charts as the
+# "Calls in Progress" line per host. Without it the line stays flat-NULL
+# for the host even though the cron is firing every 5 min (cf. fs-test-11
+# first build on 2026-05-03).
 
 ENDPOINT="http://crawl.rgs.mx:8765/monitor/ingest"
 MONITOR_TOKEN="${MONITOR_TOKEN:-REPLACE_ME}"
@@ -46,6 +51,19 @@ DISKS_JSON=$(df -BM 2>/dev/null | tail -n +2 | grep -v -E '^(tmpfs|devtmpfs|udev
 }' | sed 's/,$//')
 DISKS_JSON="[$DISKS_JSON]"
 
+# FreeSWITCH active call count via fs_cli. Counts CONFERENCE MEMBERS
+# (BBL is conference-based; member count is the true 'live' number)
+# rather than 'show calls count' which leaves zombie entries until FS
+# restart. 'conference list count' returns one line per member; +OK
+# lines are conference headers and skipped.
+CALLS_IN_PROGRESS=0
+if command -v fs_cli >/dev/null 2>&1; then
+  OUT=$(fs_cli -x 'conference list count' 2>/dev/null)
+  if ! echo "$OUT" | grep -q 'No active conferences'; then
+    CALLS_IN_PROGRESS=$(echo "$OUT" | grep -cvE '^(\+OK|\s*$)')
+  fi
+fi
+
 PAYLOAD=$(cat <<JSONEOF
 {
   "hostname": "$HOSTNAME_VAL",
@@ -60,7 +78,8 @@ PAYLOAD=$(cat <<JSONEOF
   "net_iface": "$NET_IFACE",
   "net_rx_bytes": $NET_RX,
   "net_tx_bytes": $NET_TX,
-  "disks": $DISKS_JSON
+  "disks": $DISKS_JSON,
+  "calls_in_progress": $CALLS_IN_PROGRESS
 }
 JSONEOF
 )
