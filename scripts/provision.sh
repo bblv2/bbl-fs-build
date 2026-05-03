@@ -37,12 +37,56 @@ for required in role size hostname; do
     [[ -n "${ARGS[$required]}" ]] || { echo "$0: $required is required" >&2; exit 2; }
 done
 
+# Hostname format precheck. Must be FQDN with at least one dot, and
+# the part before the first dot must be non-empty. Rejects shorthand
+# like 'fs-test-5' that would otherwise propagate as BBL_DOMAIN and
+# fail later at DNS / TLS time.
+if [[ "${ARGS[hostname]}" != *.*  || "${ARGS[hostname]%%.*}" == "" ]]; then
+    echo "$0: hostname='${ARGS[hostname]}' must be a fully-qualified domain (e.g. fs-test-5.bblapp.io)" >&2
+    exit 2
+fi
+
+# ── Resolve size → SKU ───────────────────────────────────────────────
+BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
+SIZES_FILE="$BUILD_DIR/conf/linode-sizes.conf"
+SKU="$(awk -v size="${ARGS[size]}" '$1 == size {print $2}' "$SIZES_FILE")"
+[[ -n "$SKU" ]] || { echo "$0: unknown size '${ARGS[size]}' — see $SIZES_FILE" >&2; exit 2; }
+
+LABEL="${ARGS[hostname]//./-}"
+ROOT_PASS="$(openssl rand -base64 24)"
+
+echo "==> Provisioning ${ARGS[hostname]} as Linode $SKU in ${ARGS[region]}"
+
+# ── DNS: find the Linode-managed zone for this hostname ─────────────
+# Resolve BEFORE writing any per-host conf, so a typo'd hostname can't
+# leave an orphan /etc/bbl-fs-<bad>.host.conf behind.
+ROOT_DOMAIN=
+ZONE_ID=
+while read -r line; do
+    [[ -z "$line" ]] && continue
+    z_id="$(echo "$line" | jq -r '.id')"
+    z_dom="$(echo "$line" | jq -r '.domain')"
+    if [[ "${ARGS[hostname]}" == *".$z_dom" ]]; then
+        # Take longest match (e.g., a.b.example.com prefers example.com over com)
+        if (( ${#z_dom} > ${#ROOT_DOMAIN} )); then
+            ROOT_DOMAIN="$z_dom"
+            ZONE_ID="$z_id"
+        fi
+    fi
+done < <(linode-cli domains list --json | jq -c '.[]')
+
+if [[ -z "$ZONE_ID" ]]; then
+    echo "$0: no Linode-managed zone matches '${ARGS[hostname]}' — add the zone in Linode DNS Manager first" >&2
+    exit 1
+fi
+SUBDOMAIN="${ARGS[hostname]%.$ROOT_DOMAIN}"
+echo "    DNS zone:    $ROOT_DOMAIN (ID $ZONE_ID), subdomain '$SUBDOMAIN'"
+
 # ── Resolve host.conf ────────────────────────────────────────────────
-# If host-conf= is supplied, use it verbatim (escape hatch for one-offs).
-# Otherwise: per-host file lives at /etc/bbl-fs-<short>.host.conf and is
-# auto-derived from the shared secrets file at /etc/bbl-fs.host.conf on
-# first provision. Re-provisions reuse the existing per-host file so
-# register.py IDs persist across runs.
+# host-conf= is an escape hatch. Default flow: per-host file lives at
+# /etc/bbl-fs-<short>.host.conf and is auto-derived from the shared
+# secrets file at /etc/bbl-fs.host.conf on first provision. Re-provisions
+# reuse the existing per-host file so register.py IDs persist.
 SHORT_HOST="${ARGS[hostname]%%.*}"
 PER_HOST_CONF="/etc/bbl-fs-${SHORT_HOST}.host.conf"
 SHARED_CONF="${BBL_FS_SHARED_CONF:-/etc/bbl-fs.host.conf}"
@@ -79,40 +123,6 @@ if [[ -n "$EXISTING_DOMAIN" && "$EXISTING_DOMAIN" != "${ARGS[hostname]}" ]]; the
     echo "    Fix the conf, or omit host-conf= to auto-derive." >&2
     exit 2
 fi
-
-# ── Resolve size → SKU ───────────────────────────────────────────────
-BUILD_DIR="$(cd "$(dirname "$0")/.." && pwd)"
-SIZES_FILE="$BUILD_DIR/conf/linode-sizes.conf"
-SKU="$(awk -v size="${ARGS[size]}" '$1 == size {print $2}' "$SIZES_FILE")"
-[[ -n "$SKU" ]] || { echo "$0: unknown size '${ARGS[size]}' — see $SIZES_FILE" >&2; exit 2; }
-
-LABEL="${ARGS[hostname]//./-}"
-ROOT_PASS="$(openssl rand -base64 24)"
-
-echo "==> Provisioning ${ARGS[hostname]} as Linode $SKU in ${ARGS[region]}"
-
-# ── DNS: find the Linode-managed zone for this hostname ─────────────
-ROOT_DOMAIN=
-ZONE_ID=
-while read -r line; do
-    [[ -z "$line" ]] && continue
-    z_id="$(echo "$line" | jq -r '.id')"
-    z_dom="$(echo "$line" | jq -r '.domain')"
-    if [[ "${ARGS[hostname]}" == *".$z_dom" ]]; then
-        # Take longest match (e.g., a.b.example.com prefers example.com over com)
-        if (( ${#z_dom} > ${#ROOT_DOMAIN} )); then
-            ROOT_DOMAIN="$z_dom"
-            ZONE_ID="$z_id"
-        fi
-    fi
-done < <(linode-cli domains list --json | jq -c '.[]')
-
-if [[ -z "$ZONE_ID" ]]; then
-    echo "$0: no Linode-managed zone matches '${ARGS[hostname]}' — add the zone in Linode DNS Manager first" >&2
-    exit 1
-fi
-SUBDOMAIN="${ARGS[hostname]%.$ROOT_DOMAIN}"
-echo "    DNS zone:    $ROOT_DOMAIN (ID $ZONE_ID), subdomain '$SUBDOMAIN'"
 
 # ── Build user_data: bootstrap.sh + the operator's host.conf ─────────
 TMPDIR="$(mktemp -d)"
