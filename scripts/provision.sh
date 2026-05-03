@@ -255,7 +255,9 @@ echo
 echo "==> Registering ${ARGS[hostname]} in bbl-monitor"
 CPU_COUNT=$(ssh -o BatchMode=yes "root@$LINODE_IP" 'nproc' 2>/dev/null || echo 1)
 "$PY" "$SCRIPTS/register-monitor.py" \
-    --hostname "${ARGS[hostname]}" --cpu-count "$CPU_COUNT"
+    --hostname "${ARGS[hostname]}" \
+    --cpu-count "$CPU_COUNT" \
+    --role "${ARGS[role]}"
 
 # 2. role-specific registration
 if [[ "${ARGS[role]}" == "beta" ]]; then
