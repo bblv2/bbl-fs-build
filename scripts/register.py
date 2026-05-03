@@ -39,9 +39,7 @@ from __future__ import annotations
 import argparse
 import asyncio
 import os
-import random
 import socket
-import string
 import sys
 from typing import Any
 
@@ -68,20 +66,19 @@ def resolve_ip(hostname: str) -> str:
     return socket.gethostbyname(hostname)
 
 
-# Use the same PIN as the mod_pin profile in fixtures.yaml, so the
-# load_with_quality scenario's drift check passes (it expects
-# moderator_pin='1111' for the mod_pin profile).
-DEFAULT_MODERATOR_PIN = "1111"
+async def _insert_bridge(db, fs_id: int, title: str) -> int:
+    """Insert a bridges_bridge row and return its id.
 
+    Settings match the `base` fixture profile in bbl-call-tests's
+    fixtures.yaml (moderated=FALSE, no PIN, beep on join/leave, no
+    name announcement). load_with_quality and most other regression
+    scenarios use profile_name='base' and would otherwise hit
+    fixture_matches_profile drift on a freshly-registered box.
 
-def gen_pin(length: int = 4) -> str:
-    """Random N-digit string (kept for future use; default flows use
-    DEFAULT_MODERATOR_PIN to align with the mod_pin profile fixture)."""
-    return "".join(random.choices(string.digits, k=length))
-
-
-async def _insert_bridge(db, fs_id: int, title: str, pin: str) -> int:
-    """Insert one bridges_bridge row and return its id."""
+    For scenarios that need other profiles (mod_pin, lecture, etc.),
+    PATCH the bridge to match before running, or stand up additional
+    bridges per profile.
+    """
     return await db.fetchval(
         """INSERT INTO bridges_bridge (
             company_id, freeswitch_setup_id, title,
@@ -100,7 +97,7 @@ async def _insert_bridge(db, fs_id: int, title: str, pin: str) -> int:
             $1, $2, $3,
             'U', '', 'man',
             'M', 'Please stand by.',
-            TRUE, $4, 'R',
+            FALSE, '', 'R',
             FALSE, '',
             FALSE, 'beep', 'beep',
             TRUE,
@@ -108,9 +105,9 @@ async def _insert_bridge(db, fs_id: int, title: str, pin: str) -> int:
             'normal', 'fs', 'com.twilio.music.soft-rock',
             FALSE, FALSE, FALSE,
             FALSE, FALSE,
-            FALSE, $5
+            FALSE, $4
         ) RETURNING id""",
-        TEST_COMPANY_ID, fs_id, title, pin, DEFAULT_PROMPT_SET_ID)
+        TEST_COMPANY_ID, fs_id, title, DEFAULT_PROMPT_SET_ID)
 
 
 async def _insert_bridges_did(db, did: str, bridge_id: int) -> int:
@@ -238,13 +235,12 @@ async def go(hostname: str) -> None:
         # to default audio URLs that DO play. welcome_option='D' would
         # skip the welcome+music IVR entirely (verified empirically —
         # caller hears only the PIN prompt).
-        pin = DEFAULT_MODERATOR_PIN
-        primary_bridge_id = await _insert_bridge(db, fs_id, short, pin)
+        primary_bridge_id = await _insert_bridge(db, fs_id, short)
         print(f"==> nodebblclean: inserted bridges_bridge id={primary_bridge_id} "
-              f"(primary, PIN={pin})")
-        adjacent_bridge_id = await _insert_bridge(db, fs_id, f"{short}-adj", pin)
+              f"(primary, base profile — no PIN, no moderation)")
+        adjacent_bridge_id = await _insert_bridge(db, fs_id, f"{short}-adj")
         print(f"==> nodebblclean: inserted bridges_bridge id={adjacent_bridge_id} "
-              f"(adjacent, PIN={pin})")
+              f"(adjacent, base profile — no PIN, no moderation)")
 
         # Inactive welcome-file placeholder for both bridges. chb-atl
         # looks for a 'W' file row to know it should fall back to default
@@ -272,7 +268,7 @@ async def go(hostname: str) -> None:
     print("✓ Beta box registered. Test ready.")
     print(f"  Dial (primary):  {primary_did}")
     print(f"  Adjacent DID:    {adjacent_did}   (load_with_quality cross-bridge)")
-    print(f"  Mod PIN:         {pin}")
+    print(f"  Bridge profile:  base (no PIN, no moderation)")
     print(f"  Connection:      {connection_id}")
     print(f"  FS setup id:     {fs_id}")
     print(f"  Primary bridge:  id={primary_bridge_id}  pool={primary_pool_name}")
@@ -281,7 +277,6 @@ async def go(hostname: str) -> None:
     print("# Append to /etc/bbl-fs-host.conf (operator side):")
     print(f"BBL_TELNYX_CONNECTION_ID={connection_id}")
     print(f"BBL_TEST_DID={primary_did}")
-    print(f"BBL_TEST_PIN={pin}")
     print(f"BBL_TEST_BRIDGE_ID={primary_bridge_id}")
     print(f"BBL_TEST_FS_SETUP_ID={fs_id}")
     print(f"BBL_TEST_DID_POOL_NAME={primary_pool_name}")
