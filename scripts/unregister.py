@@ -147,10 +147,62 @@ async def go(hostname: str, host_conf_path: str) -> None:
     print("==> Unregister complete")
 
 
+def _auto_env() -> None:
+    """If BBL_MONITOR_DSN / TELNYX_API_KEY aren't already set, source
+    /opt/bbl-call-tests/.env (operator side). Same convention as
+    teardown.sh — keeps unregister.py runnable with just --hostname.
+    """
+    if os.environ.get("BBL_MONITOR_DSN") and os.environ.get("TELNYX_API_KEY"):
+        return
+    env_path = Path(os.environ.get("BBL_OPERATOR_ENV", "/opt/bbl-call-tests/.env"))
+    if not env_path.is_file():
+        return
+    for line in env_path.read_text().splitlines():
+        line = line.strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        k, _, v = line.partition("=")
+        os.environ.setdefault(k.strip(), v.strip().strip('"').strip("'"))
+
+
+def _resolve_host_conf(hostname: str) -> str | None:
+    """Find the operator-side per-host conf for `hostname`. Tries the
+    `/etc/bbl-fs-<short>.host.conf` convention plus the legacy
+    `/etc/bbl-fs-<fqdn>.host.conf` shape used by some pre-2026-05
+    builds. Returns the path if found, else None.
+    """
+    short = hostname.split(".", 1)[0]
+    for candidate in (f"/etc/bbl-fs-{short}.host.conf",
+                      f"/etc/bbl-fs-{hostname}.host.conf"):
+        if Path(candidate).is_file():
+            return candidate
+    return None
+
+
 if __name__ == "__main__":
-    p = argparse.ArgumentParser()
-    p.add_argument("--hostname", required=True)
-    p.add_argument("--host-conf", required=True,
-                   help="Path to operator-side host.conf with persisted register IDs")
+    p = argparse.ArgumentParser(
+        description="Release a beta FS box's DIDs/bridges and tear down "
+                    "its Telnyx connection. Run teardown.sh instead if you "
+                    "also want to delete the Linode + DNS record.")
+    p.add_argument("--hostname", required=True,
+                   help="Short hostname (e.g. fs-test-3) or FQDN. Short "
+                        "hostnames auto-append .bblapp.io.")
+    p.add_argument("--host-conf",
+                   help="Path to operator-side host.conf with persisted "
+                        "register IDs. Auto-derived from --hostname if "
+                        "omitted.")
     a = p.parse_args()
-    asyncio.run(go(a.hostname, a.host_conf))
+
+    _auto_env()
+    if not os.environ.get("BBL_MONITOR_DSN"):
+        sys.exit("BBL_MONITOR_DSN is not set and could not be sourced from "
+                 "/opt/bbl-call-tests/.env — set it explicitly or export "
+                 "BBL_OPERATOR_ENV=<path>")
+
+    fqdn = a.hostname if "." in a.hostname else f"{a.hostname}.bblapp.io"
+    host_conf = a.host_conf or _resolve_host_conf(fqdn)
+    if not host_conf:
+        sys.exit(f"could not auto-find host.conf for {fqdn}; "
+                 f"pass --host-conf <path> explicitly")
+
+    asyncio.run(go(fqdn, host_conf))
