@@ -91,24 +91,49 @@ if command -v cpupower >/dev/null; then
     cpupower frequency-set -g performance >/dev/null 2>&1 || true
 fi
 
-echo "==> fail2ban for FreeSWITCH (after FS is configured, the jail starts)"
-# We install the jail config now but don't enable until step 03 finishes
-# laying down /var/log/freeswitch (jail filter reads that).
-cat > /etc/fail2ban/filter.d/freeswitch-bbl.conf <<'EOF'
-[Definition]
-failregex = ^.*\[WARNING\] sofia_reg\.c:.*SIP auth (failure|challenge) \(REGISTER\) on sofia profile.*from <sip:[^@]*@<HOST>>.*$
-            ^.*\[WARNING\] sofia\.c:.*Hangup .* \[CALL_REJECTED\].*from <HOST>.*$
-ignoreregex =
-EOF
-cat > /etc/fail2ban/jail.d/freeswitch-bbl.conf <<'EOF'
-[freeswitch-bbl]
+echo "==> fail2ban: SSH + FreeSWITCH jails (mirror of fs-atl reference config)"
+# Use the upstream `freeswitch` filter that ships with the fail2ban package
+# (works at fs-atl). Earlier provisions wrote a custom freeswitch-bbl filter
+# that was narrower and started before /var/log/freeswitch existed; the
+# service ended up in `failed` state on every new box. Replace with an
+# explicit jail.local, ensure the FS logfile path exists pre-FS-install,
+# and start the service unconditionally.
+cat > /etc/fail2ban/jail.local <<'EOF'
+[sshd]
 enabled  = true
-port     = 5060,5061,5080,5081,7443
-filter   = freeswitch-bbl
-logpath  = /var/log/freeswitch/freeswitch.log
-maxretry = 5
-findtime = 300
+backend  = systemd
 bantime  = 86400
+findtime = 600
+maxretry = 5
+ignoreip = 127.0.0.1/8 168.227.227.0/24
+
+[freeswitch]
+enabled   = true
+mode      = extra
+filter    = freeswitch
+logpath   = /var/log/freeswitch/freeswitch.log
+maxretry  = 5
+findtime  = 60
+bantime   = 86400
+protocol  = udp
+port      = 5060,5080
+action    = nftables-multiport[name=freeswitch, port="5060,5080", protocol=udp]
+ignoreip  = 127.0.0.1/8 192.76.120.0/24 64.16.224.0/19 64.16.250.10/32 192.76.120.31/32
 EOF
+
+# Drop any prior bbl-build provisional jail/filter (older provisions wrote
+# /etc/fail2ban/{jail.d,filter.d}/freeswitch-bbl.conf — supplanted by the
+# upstream `freeswitch` filter referenced above).
+rm -f /etc/fail2ban/jail.d/freeswitch-bbl.conf \
+      /etc/fail2ban/filter.d/freeswitch-bbl.conf
+
+# Pre-create the FS log path so the freeswitch jail starts cleanly on first
+# boot, before step 02 installs FreeSWITCH. fail2ban won't error on an
+# existing-but-empty logfile.
+install -d -m 0755 /var/log/freeswitch
+touch /var/log/freeswitch/freeswitch.log
+
+systemctl enable --now fail2ban
+systemctl restart fail2ban
 
 echo "==> 01-base.sh complete"
