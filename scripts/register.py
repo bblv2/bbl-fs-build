@@ -129,30 +129,60 @@ async def go(hostname: str) -> None:
     short = hostname.split(".", 1)[0]
     print(f"==> Registering {hostname} ({box_ip}) for beta testing")
 
-    # 1. Telnyx: create per-box IP-typed SIP connection
-    print("==> Telnyx: creating IP connection")
-    conn_body = {
-        "connection_name": f"bbl-fs-build-{short}",
-        "active": True,
-        "anchorsite_override": "Latency",
-        "default_on_hold_comfort_noise_enabled": True,
-        "dtmf_type": "RFC 2833",
-        "encode_contact_header_enabled": False,
-        "onnet_t38_passthrough_enabled": False,
-        "inbound": {
-            "ani_number_format": "+E.164",
-            "dnis_number_format": "+e164",
-            "sip_subdomain_receive_settings": "from_anyone",
-        },
-    }
-    conn_resp = telnyx("POST", "/ip_connections", json=conn_body)
-    connection_id = conn_resp["data"]["id"]
-    print(f"    connection_id={connection_id}")
+    # 1. Telnyx: create per-box IP-typed SIP connection (idempotent —
+    #    reuse existing if a connection with this name already exists,
+    #    so re-running register.py for the same hostname doesn't orphan
+    #    a duplicate connection in Telnyx).
+    conn_name = f"bbl-fs-build-{short}"
+    # Client-side exact-name filter — Telnyx's filter[connection_name] does
+    # prefix/substring matching, so a search for "bbl-fs-build-fsb-atl11"
+    # will match an existing "bbl-fs-build-fsb-atl1". Don't trust the API
+    # filter alone; require connection_name == conn_name exactly.
+    existing = telnyx("GET", f"/connections?filter[connection_name]={conn_name}")
+    exact_matches = [c for c in (existing.get("data") or [])
+                     if c.get("connection_name") == conn_name]
+    if len(exact_matches) > 1:
+        sys.exit(f"Telnyx returned multiple connections named exactly "
+                 f"'{conn_name}' — operator must reconcile manually")
+    if exact_matches:
+        connection_id = exact_matches[0]["id"]
+        print(f"==> Telnyx: reusing existing connection {connection_id} ({conn_name})")
+        # Verify the box's IP is attached; attach it if not.
+        ips_resp = telnyx("GET", f"/ips?filter[connection_id]={connection_id}")
+        attached = {ip.get("ip_address") for ip in (ips_resp.get("data") or [])}
+        if box_ip in attached:
+            print(f"    IP {box_ip}:5060 already attached")
+        else:
+            print(f"    attaching {box_ip}:5060 to existing connection")
+            telnyx("POST", "/ips", json={
+                "connection_id": connection_id,
+                "ip_address": box_ip,
+                "port": 5060,
+            })
+    else:
+        print("==> Telnyx: creating IP connection")
+        conn_body = {
+            "connection_name": conn_name,
+            "active": True,
+            "anchorsite_override": "Latency",
+            "default_on_hold_comfort_noise_enabled": True,
+            "dtmf_type": "RFC 2833",
+            "encode_contact_header_enabled": False,
+            "onnet_t38_passthrough_enabled": False,
+            "inbound": {
+                "ani_number_format": "+E.164",
+                "dnis_number_format": "+e164",
+                "sip_subdomain_receive_settings": "from_anyone",
+            },
+        }
+        conn_resp = telnyx("POST", "/ip_connections", json=conn_body)
+        connection_id = conn_resp["data"]["id"]
+        print(f"    connection_id={connection_id}")
 
-    # Attach the IP destination (FS host:5060)
-    print("==> Telnyx: attaching IP destination")
-    ip_body = {"connection_id": connection_id, "ip_address": box_ip, "port": 5060}
-    telnyx("POST", "/ips", json=ip_body)
+        # Attach the IP destination (FS host:5060)
+        print("==> Telnyx: attaching IP destination")
+        ip_body = {"connection_id": connection_id, "ip_address": box_ip, "port": 5060}
+        telnyx("POST", "/ips", json=ip_body)
 
     # 2. Pool: atomically allocate primary + adjacent DIDs.
     # Both succeed or both roll back — partial assignment would leave
@@ -214,17 +244,20 @@ async def go(hostname: str) -> None:
             fs_id = existing_fs["id"]
             await db.execute(
                 "UPDATE bridges_freeswitchsetup SET nickname = $1, dns_name = $2, "
-                "jfb_url = $3, plivo_server_url = $4 WHERE id = $5",
+                "jfb_url = $3, plivo_server_url = $4, django_url = $5 WHERE id = $6",
                 short, hostname, f"https://{hostname}",
-                "http://lb-atl.bblapp.io:8084/", fs_id)
+                "http://lbb-atl.bblapp.io:8084/",      # beta LB (was lb-atl, prod typo)
+                "https://beta.bblapp.io",              # per-FS callback routing
+                fs_id)
             print(f"==> nodebblclean: updated bridges_freeswitchsetup id={fs_id}")
         else:
             fs_id = await db.fetchval(
                 "INSERT INTO bridges_freeswitchsetup "
-                "(nickname, ip_address, dns_name, jfb_url, plivo_server_url, \"default\") "
-                "VALUES ($1, $2, $3, $4, $5, FALSE) RETURNING id",
+                "(nickname, ip_address, dns_name, jfb_url, plivo_server_url, django_url, \"default\") "
+                "VALUES ($1, $2, $3, $4, $5, $6, false) RETURNING id",
                 short, box_ip, hostname, f"https://{hostname}",
-                "http://lb-atl.bblapp.io:8084/")
+                "http://lbb-atl.bblapp.io:8084/",      # beta LB
+                "https://beta.bblapp.io")              # per-FS callback routing
             print(f"==> nodebblclean: inserted bridges_freeswitchsetup id={fs_id}")
 
         # bridges_bridge × 2 — same freeswitch_setup_id so both bridges

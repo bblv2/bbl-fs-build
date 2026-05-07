@@ -212,11 +212,14 @@ echo "    Tail with:  ssh root@$LINODE_IP tail -f /var/log/bbl-fs-build.log"
 #    GitHub. Wait for SSH to come up, then rsync from operators clone.
 LOCAL_CONFIG=${BBL_LOCAL_CONFIG_DIR:-/opt/bbl-fs/bbl-fs-config}
 echo "==> Waiting for SSH to come up on $LINODE_IP, then pushing bbl-fs-config"
+echo -n "    "
 for _ in $(seq 1 30); do
     if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
         "root@$LINODE_IP" 'test -d /usr/src' 2>/dev/null; then
+        echo " up"
         break
     fi
+    echo -n "."
     sleep 5
 done
 if [[ -d "$LOCAL_CONFIG" ]]; then
@@ -235,10 +238,25 @@ else
 fi
 
 # ── Don't proceed until /etc/bbl-fs-build appears (setup.sh has finished)
+echo
+echo "==> Waiting for setup.sh to finish (~5-8 min). Live tail:"
+echo "        ssh root@$LINODE_IP tail -f /var/log/bbl-fs-build.log"
+echo -n "    "
 for _ in $(seq 1 60); do
     if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
         "root@$LINODE_IP" 'test -f /etc/bbl-fs-build' 2>/dev/null; then
+        echo " done"
         break
+    fi
+    # Show the most recent step header from the build log so the operator
+    # knows what's actually running, not just "still waiting".
+    last_step=$(ssh -o BatchMode=yes -o ConnectTimeout=3 "root@$LINODE_IP" \
+        'grep -E "^==> steps/" /var/log/bbl-fs-build.log 2>/dev/null | tail -1' 2>/dev/null \
+        | sed 's|.*steps/||;s|\.sh.*||')
+    if [[ -n "$last_step" ]]; then
+        printf " [%s]" "$last_step"
+    else
+        echo -n "."
     fi
     sleep 10
 done

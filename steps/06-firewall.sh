@@ -48,6 +48,7 @@ ufw allow 80/tcp comment 'acme http-01 challenge'
 # Without this rule, nudge / floor-event commands from lb-atl time out.
 ufw allow from 50.116.36.14 to any port 8021 proto tcp comment 'esl from lb-atl'
 ufw allow from 66.228.60.230 to any port 8021 proto tcp comment 'esl from rpt'
+ufw allow from 50.116.45.69 to any port 8021 proto tcp comment 'esl from lbb-atl'
 
 # ICMP echo (ping) — debugging
 ufw default allow routed
