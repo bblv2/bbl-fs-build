@@ -75,32 +75,40 @@ else
     echo "    extracted"
 fi
 
-echo "==> 4/4 (re)load mod_local_stream so new genre dirs are scanned"
-# Reload XML so updated modules.conf.xml + local_stream.conf.xml take effect.
-fs_cli -x 'reloadxml' >/dev/null 2>&1 || true
-# mod_local_stream scans the configured directories at LOAD time. If the
-# module is already loaded but new genre dirs were just added (or the conf
-# was just updated), an unload+load cycle is needed for it to register the
-# new streams. `local_stream reload <name>` only re-reads files for an
-# already-known stream — it doesn't discover newly-added <directory>
-# entries.
-if fs_cli -x 'module_exists mod_local_stream' 2>/dev/null | grep -q true; then
-    fs_cli -x 'unload mod_local_stream' >/dev/null 2>&1 || true
-fi
-fs_cli -x 'load mod_local_stream' >/dev/null 2>&1
-fs_cli -x 'module_exists mod_local_stream' 2>/dev/null | grep -q true || {
-    echo "ERROR: mod_local_stream failed to load" >&2; exit 1; }
+echo "==> 4/4 (re)load mod_local_stream — only if FS is currently running"
+# During fresh provision, step 02 stops FS and it isn't started again until
+# step 07-finalize. fs_cli would block forever waiting on ESL. The module
+# declaration in modules.conf.xml is enough — FS will load mod_local_stream
+# and scan the music dirs at start time. 08-verify.sh asserts streams visible.
+#
+# When this step runs on an ALREADY-RUNNING FS (e.g. re-provisioning to
+# repair an existing host), we do want unload+load to pick up newly-added
+# directories — `local_stream reload <name>` only re-reads files for an
+# already-known stream, doesn't discover new <directory> entries.
+if systemctl is-active --quiet freeswitch && \
+   timeout 5 fs_cli -x 'status' >/dev/null 2>&1; then
+    echo "    FS is up — issuing unload+load + asserting all ${#GENRES[@]} streams"
+    fs_cli -x 'reloadxml' >/dev/null 2>&1 || true
+    if fs_cli -x 'module_exists mod_local_stream' 2>/dev/null | grep -q true; then
+        fs_cli -x 'unload mod_local_stream' >/dev/null 2>&1 || true
+    fi
+    fs_cli -x 'load mod_local_stream' >/dev/null 2>&1
+    fs_cli -x 'module_exists mod_local_stream' 2>/dev/null | grep -q true || {
+        echo "ERROR: mod_local_stream failed to load" >&2; exit 1; }
 
-# Final assertion — every genre we just placed should be visible
-MISSING=()
-for g in "${GENRES[@]}"; do
-    out=$(fs_cli -x "local_stream show $g" 2>&1 || true)
-    [[ "$out" == *"location"* ]] || MISSING+=("$g")
-done
-if [[ ${#MISSING[@]} -gt 0 ]]; then
-    echo "ERROR: streams not visible after load: ${MISSING[*]}" >&2
-    exit 1
+    MISSING=()
+    for g in "${GENRES[@]}"; do
+        out=$(timeout 5 fs_cli -x "local_stream show $g" 2>&1 || true)
+        [[ "$out" == *"location"* ]] || MISSING+=("$g")
+    done
+    if [[ ${#MISSING[@]} -gt 0 ]]; then
+        echo "ERROR: streams not visible after load: ${MISSING[*]}" >&2
+        exit 1
+    fi
+    echo "    mod_local_stream loaded; all ${#GENRES[@]} streams visible"
+else
+    echo "    FS not running — module will load at startup (step 07 starts FS;"
+    echo "    step 08-verify.sh asserts streams visible after that)."
 fi
-echo "    mod_local_stream loaded; all ${#GENRES[@]} streams visible"
 
 echo "==> 03c-fs-music.sh complete"
