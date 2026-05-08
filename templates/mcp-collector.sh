@@ -73,6 +73,7 @@ fi
 GIT_REPOS_JSON=""
 GIT_PATHS=(
     "/projects/bbl-django:bbl-django"
+    "/opt/bblfrontend:bblfrontend"
     "/opt/bbl-esl:bbl-esl"
     "/opt/bbl-monitor:bbl-monitor"
     "/opt/bbl-fs/bbl-fs-build:bbl-fs-build"
