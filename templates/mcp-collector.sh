@@ -154,6 +154,37 @@ for sv_name in "${KNOWN_SYSTEMD[@]}"; do
 done
 SERVICES_JSON="[${SERVICES_JSON%,}]"
 
+# ── TLS certs (ACME-managed) ─────────────────────────────────────────────
+# Enumerate all certs we can find at canonical paths and emit subject CN +
+# notAfter for each. Used by /servers to surface upcoming expiries before
+# they fire. Skips FS internal certs (dtls-srtp/wss/tls/cacert) — those
+# aren't ACME-managed and don't need expiry tracking.
+CERTS_PARTS=""
+for cert in /etc/letsencrypt/live/*/fullchain.pem; do
+    [ -e "$cert" ] || continue
+    cn=$(basename "$(dirname "$cert")")
+    end=$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | cut -d= -f2)
+    [ -z "$end" ] && continue
+    end_iso=$(date -u -d "$end" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    days=$(( ($(date -u -d "$end" +%s) - $(date -u +%s)) / 86400 ))
+    obj="{\"cn\":\"$cn\",\"path\":\"$cert\",\"expires\":\"$end_iso\",\"days_left\":$days}"
+    CERTS_PARTS="${CERTS_PARTS}${obj},"
+done
+# acme.sh path used by bbl-fs-build for FS hosts (host's own cert in FS tls dir)
+for cert in /etc/freeswitch/tls/*.fullchain.pem; do
+    [ -e "$cert" ] || continue
+    cn=$(basename "$cert" .fullchain.pem)
+    # Skip the FS-internal cert that uses non-FQDN names
+    case "$cn" in tls|wss|dtls-srtp|cacert) continue ;; esac
+    end=$(openssl x509 -in "$cert" -noout -enddate 2>/dev/null | cut -d= -f2)
+    [ -z "$end" ] && continue
+    end_iso=$(date -u -d "$end" +%Y-%m-%dT%H:%M:%SZ 2>/dev/null)
+    days=$(( ($(date -u -d "$end" +%s) - $(date -u +%s)) / 86400 ))
+    obj="{\"cn\":\"$cn\",\"path\":\"$cert\",\"expires\":\"$end_iso\",\"days_left\":$days}"
+    CERTS_PARTS="${CERTS_PARTS}${obj},"
+done
+CERTS_JSON="[${CERTS_PARTS%,}]"
+
 # Versions
 VERS_PARTS=""
 PY_VER=$(python3 --version 2>&1 | awk '{print $2}')
@@ -177,7 +208,7 @@ fi
 
 VERSIONS_JSON="{${VERS_PARTS%,}}"
 
-COMPONENTS_JSON="{\"git_repos\":$GIT_REPOS_JSON,\"services\":$SERVICES_JSON,\"versions\":$VERSIONS_JSON}"
+COMPONENTS_JSON="{\"git_repos\":$GIT_REPOS_JSON,\"services\":$SERVICES_JSON,\"versions\":$VERSIONS_JSON,\"certs\":$CERTS_JSON}"
 
 PAYLOAD=$(cat <<JSONEOF
 {
