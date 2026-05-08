@@ -292,6 +292,26 @@ if [[ "${ARGS[role]}" == "beta" ]]; then
         echo "==> Persisted register IDs to $HOST_CONF"
     fi
     rm -f "$REGOUT"
+
+    # ── Open lbb-atl ufw for the new FS box's ESL outbound socket ──────
+    # FS dialplan dispatches every inbound PSTN call to the beta ESL relay
+    # via `socket(50.116.45.69:8085 async full)`. lbb-atl's firewall is
+    # explicit-allow on 8085 (denies anything else), so each new beta FS
+    # IP must be whitelisted. Without this, calls reach FS, FS tries to
+    # connect to the relay, the SYN is dropped, and the caller eventually
+    # gets 480 Temporarily Unavailable. Idempotent: ufw skips dupes.
+    LBB_HOST="${BBL_LBB_HOST:-lbb-atl.bblapp.io}"
+    echo
+    echo "==> Allow $LINODE_IP on $LBB_HOST:8085 (beta ESL outbound)"
+    if ssh -o BatchMode=yes -o ConnectTimeout=5 -o StrictHostKeyChecking=accept-new \
+            "$LBB_HOST" \
+            "ufw allow from $LINODE_IP to any port 8085 proto tcp comment '${ARGS[hostname]}-esl-outbound'" \
+            2>&1 | sed 's/^/    /'; then
+        echo "    ufw rule added (or already present)"
+    else
+        echo "    WARNING: failed to add ufw rule on $LBB_HOST — calls will hit 480 until fixed manually:"
+        echo "      ssh $LBB_HOST 'ufw allow from $LINODE_IP to any port 8085 proto tcp comment ${ARGS[hostname]}-esl-outbound'"
+    fi
 elif [[ "${ARGS[role]}" == "prod" ]]; then
     echo
     echo "==> Role=prod: minimal registration only (bbl2022 freeswitch_setup)"

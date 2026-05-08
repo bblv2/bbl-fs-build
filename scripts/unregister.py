@@ -54,6 +54,33 @@ def parse_host_conf(path: Path) -> dict:
     return out
 
 
+def _close_lbb_ufw(ip: str, hostname: str) -> None:
+    """Remove the lbb-atl ufw rule provision.sh added for this beta FS box.
+    Best-effort: missing rule (already removed, never added) isn't fatal —
+    print and continue. Unregister is intentionally tolerant of partial state.
+    """
+    if not ip or ip in ("0.0.0.0", "127.0.0.1"):
+        return
+    import subprocess
+    lbb_host = os.environ.get("BBL_LBB_HOST", "lbb-atl.bblapp.io")
+    cmd = ["ssh", "-o", "BatchMode=yes", "-o", "ConnectTimeout=5",
+           "-o", "StrictHostKeyChecking=accept-new",
+           lbb_host,
+           # `ufw delete allow from X to any port Y proto tcp` exits 0 when
+           # the rule existed (any comment) and was removed; non-zero on no
+           # match. Either is fine — we just want the box's IP off the list.
+           f"ufw delete allow from {ip} to any port 8085 proto tcp"]
+    try:
+        r = subprocess.run(cmd, capture_output=True, text=True, timeout=15)
+        first = ((r.stdout or r.stderr or "").splitlines() or [""])[0].strip()
+        if r.returncode == 0:
+            print(f"  lbb-atl ufw removed allow from {ip}: {first}")
+        else:
+            print(f"  lbb-atl ufw delete from {ip} → rc={r.returncode}: {first}")
+    except Exception as e:
+        print(f"  lbb-atl ufw delete attempt raised: {e} (continuing)")
+
+
 async def go(hostname: str, host_conf_path: str) -> None:
     dsn = os.environ["BBL_MONITOR_DSN"].replace("/bbl2022", NODEBBLCLEAN_DSN_OVERRIDE)
     conf = parse_host_conf(Path(host_conf_path))
@@ -76,6 +103,7 @@ async def go(hostname: str, host_conf_path: str) -> None:
         ("adjacent", adjacent_did, adjacent_bridge_id, adjacent_pool_name),
     ]
 
+    fs_ip_for_ufw_cleanup = None  # populated below if fs_setup row found
     db = await asyncpg.connect(dsn)
     try:
         for label, did, b_id, _pool in legs:
@@ -94,6 +122,14 @@ async def go(hostname: str, host_conf_path: str) -> None:
                     int(b_id))
                 print(f"  bridges_bridge ({label}) soft-delete + FK null: {n}")
         if fs_setup_id:
+            # Capture the IP BEFORE neutralizing — needed to remove the
+            # matching lbb-atl ufw allow that provision.sh added.
+            row = await db.fetchrow(
+                "SELECT ip_address FROM bridges_freeswitchsetup WHERE id = $1",
+                int(fs_setup_id))
+            if row and row["ip_address"]:
+                fs_ip_for_ufw_cleanup = row["ip_address"]
+
             # Don't DELETE — bridges_conferencefreeswitch FKs to fs_setup too,
             # blocking any delete on rows that ever hosted a conference.
             # Instead, NEUTRALIZE: rename + zero the IP so the row is preserved
@@ -143,6 +179,10 @@ async def go(hostname: str, host_conf_path: str) -> None:
     if connection_id:
         print(f"  Telnyx delete connection {connection_id}")
         telnyx("DELETE", f"/ip_connections/{connection_id}")
+
+    # lbb-atl ufw cleanup — provision.sh added an allow for this box's IP
+    # on port 8085 (beta ESL outbound). Remove it now that the box is gone.
+    _close_lbb_ufw(fs_ip_for_ufw_cleanup, hostname)
 
     print("==> Unregister complete")
 
