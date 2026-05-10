@@ -12,7 +12,11 @@ box appears in — bbl-monitor's page_load() queries by role, so getting
 this right at provision time is what makes new boxes auto-appear without
 editing server.py.
 
-Run on rpt. Reads BBL_MONITOR_DSN from env (bbl-call-tests/.env on rpt).
+Run on rpt. Reads MONITOR_DB_DSN from env (bbl-call-tests/.env on rpt).
+The monitor_hosts table lives in db-atl/monitor (separate DB from /bbl
+since the 2026-05-09 PG migration). Pre-migration this script used
+BBL_MONITOR_DSN directly; that variable now points at /bbl and won't
+find monitor_hosts.
 """
 from __future__ import annotations
 import argparse
@@ -24,9 +28,9 @@ import asyncio
 
 async def go(hostname: str, cpu_count: int, display_name: str | None,
              role: str | None) -> None:
-    dsn = os.environ.get("BBL_MONITOR_DSN")
+    dsn = os.environ.get("MONITOR_DB_DSN")
     if not dsn:
-        sys.exit("BBL_MONITOR_DSN unset — source /opt/bbl-call-tests/.env first")
+        sys.exit("MONITOR_DB_DSN unset — source /opt/bbl-call-tests/.env first")
 
     if not display_name:
         display_name = hostname.split(".", 1)[0]

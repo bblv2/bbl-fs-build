@@ -26,7 +26,6 @@ import requests
 
 
 TELNYX = "https://api.telnyx.com/v2"
-NODEBBLCLEAN_DSN_OVERRIDE = "/nodebblclean"
 
 
 def telnyx(method: str, path: str, **kwargs) -> dict | None:
@@ -82,7 +81,9 @@ def _close_lbb_ufw(ip: str, hostname: str) -> None:
 
 
 async def go(hostname: str, host_conf_path: str) -> None:
-    dsn = os.environ["BBL_MONITOR_DSN"].replace("/bbl2022", NODEBBLCLEAN_DSN_OVERRIDE)
+    dsn = os.environ.get("BBL_BETA_DSN")
+    if not dsn:
+        sys.exit("BBL_BETA_DSN unset — source /opt/bbl-call-tests/.env first")
     conf = parse_host_conf(Path(host_conf_path))
     print(f"==> Unregistering {hostname}")
 
@@ -188,11 +189,11 @@ async def go(hostname: str, host_conf_path: str) -> None:
 
 
 def _auto_env() -> None:
-    """If BBL_MONITOR_DSN / TELNYX_API_KEY aren't already set, source
+    """If BBL_BETA_DSN / TELNYX_API_KEY aren't already set, source
     /opt/bbl-call-tests/.env (operator side). Same convention as
     teardown.sh — keeps unregister.py runnable with just --hostname.
     """
-    if os.environ.get("BBL_MONITOR_DSN") and os.environ.get("TELNYX_API_KEY"):
+    if os.environ.get("BBL_BETA_DSN") and os.environ.get("TELNYX_API_KEY"):
         return
     env_path = Path(os.environ.get("BBL_OPERATOR_ENV", "/opt/bbl-call-tests/.env"))
     if not env_path.is_file():
@@ -248,8 +249,8 @@ if __name__ == "__main__":
     a = p.parse_args()
 
     _auto_env()
-    if not os.environ.get("BBL_MONITOR_DSN"):
-        sys.exit("BBL_MONITOR_DSN is not set and could not be sourced from "
+    if not os.environ.get("BBL_BETA_DSN"):
+        sys.exit("BBL_BETA_DSN is not set and could not be sourced from "
                  "/opt/bbl-call-tests/.env — set it explicitly or export "
                  "BBL_OPERATOR_ENV=<path>")
 

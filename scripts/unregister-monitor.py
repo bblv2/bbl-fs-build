@@ -15,9 +15,9 @@ import asyncpg
 
 
 async def go(hostname: str) -> None:
-    dsn = os.environ.get("BBL_MONITOR_DSN")
+    dsn = os.environ.get("MONITOR_DB_DSN")
     if not dsn:
-        sys.exit("BBL_MONITOR_DSN unset")
+        sys.exit("MONITOR_DB_DSN unset — source /opt/bbl-call-tests/.env first")
     conn = await asyncpg.connect(dsn)
     try:
         n = await conn.execute(

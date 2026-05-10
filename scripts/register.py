@@ -28,7 +28,12 @@ Steps:
   9. Print: dial <DID>, mod PIN <PIN>, plus IDs to persist into host.conf
 
 Env required:
-  BBL_MONITOR_DSN              postgres://... (for nodebblclean access via repo)
+  BBL_BETA_DSN                 postgres://...db-atl/bbl_beta — destination for
+                               bbl_test_did_pool, bridges_freeswitchsetup,
+                               bridges_bridge, bridges_did writes (post
+                               2026-05-09 PG migration; pre-migration this
+                               was derived from BBL_MONITOR_DSN by swapping
+                               /bbl2022 → /nodebblclean).
   TELNYX_API_KEY               Telnyx Mission Control API token
   TELNYX_OUTBOUND_PROFILE_ID   (optional) outbound voice profile to attach
 
@@ -48,7 +53,6 @@ import requests
 
 
 TELNYX = "https://api.telnyx.com/v2"
-NODEBBLCLEAN_DSN_OVERRIDE = "/nodebblclean"
 TEST_COMPANY_ID = 1   # test123 (diego@rgs.mx)
 DEFAULT_PROMPT_SET_ID = 3   # 'drew' — has full prompt set including moderator_welcome
 
@@ -124,7 +128,9 @@ async def _insert_bridges_did(db, did: str, bridge_id: int) -> int:
 
 
 async def go(hostname: str) -> None:
-    dsn = os.environ["BBL_MONITOR_DSN"].replace("/bbl2022", NODEBBLCLEAN_DSN_OVERRIDE)
+    dsn = os.environ.get("BBL_BETA_DSN")
+    if not dsn:
+        sys.exit("BBL_BETA_DSN unset — source /opt/bbl-call-tests/.env first")
     box_ip = resolve_ip(hostname)
     short = hostname.split(".", 1)[0]
     print(f"==> Registering {hostname} ({box_ip}) for beta testing")
