@@ -1,12 +1,19 @@
 #!/bin/bash
-# MCP Server Metrics Collector — v2 (adds components inventory)
+# MCP Server Metrics Collector — v3 (adds per-conference detail)
 # Deploy to each monitored host, run every 5 min via cron:
 # */5 * * * * MONITOR_TOKEN=mcp-monitor-2026 /usr/local/bin/mcp-collector.sh
 #
-# v2 adds the `components` field — auto-detected per-host inventory of
+# v2 added the `components` field — auto-detected per-host inventory of
 # installed git repos (HEAD/branch/dirty count), supervisor/systemd
-# services, and version strings (python/django/freeswitch/nginx). Used
-# by the bbl-monitor /servers drift dashboard.
+# services, and version strings (python/django/freeswitch/nginx).
+#
+# v3 adds `conferences` — per-active-conference member roster from FS
+# (name, uuid, run_time, per-member id/uuid/cid/join_age/is_moderator/
+# talking/hold/has_floor). Drives the /dashboard active-conferences
+# grid in bbl-monitor without the monitor host having to ssh into FS.
+# Empty array on non-FS hosts; the ingest endpoint REPLACEs FS-conf
+# rows for this host each push, so confs that end disappear within
+# one collector tick.
 
 ENDPOINT="http://crawl.rgs.mx:8765/monitor/ingest"
 MONITOR_TOKEN="${MONITOR_TOKEN:-REPLACE_ME}"
@@ -52,12 +59,89 @@ DISKS_JSON=$(df -BM 2>/dev/null | tail -n +2 | grep -v -E '^(tmpfs|devtmpfs|udev
 DISKS_JSON="[$DISKS_JSON]"
 
 
-# Calls in progress (FreeSwitch only — fs_cli must be available)
+# Calls in progress (FreeSwitch only — fs_cli must be available).
+# fs_cli is at one of two paths depending on FS build. Try common names
+# first, fall back to the versioned path.
 CALLS_IN_PROGRESS="null"
-FS_CLI=$(command -v fs_cli 2>/dev/null || echo /usr/local/freeswitch-1.10.5.-release/bin/fs_cli)
-if [ -x "$FS_CLI" ]; then
+FS_CLI=$(command -v fs_cli 2>/dev/null)
+[ -z "$FS_CLI" ] && [ -x /usr/local/freeswitch/bin/fs_cli ] && FS_CLI=/usr/local/freeswitch/bin/fs_cli
+[ -z "$FS_CLI" ] && [ -x /usr/local/freeswitch-1.10.5.-release/bin/fs_cli ] && FS_CLI=/usr/local/freeswitch-1.10.5.-release/bin/fs_cli
+if [ -n "$FS_CLI" ] && [ -x "$FS_CLI" ]; then
   _count=$($FS_CLI -x "show calls" 2>/dev/null | grep -E "^[0-9]+ total" | grep -oE "^[0-9]+")
   [ -n "$_count" ] && CALLS_IN_PROGRESS=$_count
+fi
+
+# Per-conference detail (FreeSwitch only). Enumerate active conferences
+# via `conference list count`, then dump each one's XML and parse to a
+# JSON array. Each entry: { name, uuid, member_count, run_time_s,
+# members: [...] } where each member has {member_id, uuid,
+# caller_id_number, caller_id_name, join_age_s, is_moderator, talking,
+# hold, has_floor}. Empty array if fs_cli missing or no active confs.
+# Bridge id is embedded in conf name ("Room-<bridge>" or "Room-<b>-<r>")
+# — the server-side mapping happens in bbl-mcp ingest, not here.
+CONFERENCES_JSON="[]"
+if [ -n "$FS_CLI" ] && [ -x "$FS_CLI" ] && command -v python3 >/dev/null 2>&1; then
+  CONF_NAMES=$($FS_CLI -x "conference list count" 2>/dev/null \
+              | grep -oE "^\+OK Conference [^ ]+" | awk '{print $3}')
+  if [ -n "$CONF_NAMES" ]; then
+    CONF_XML_TMP=$(mktemp)
+    for _cn in $CONF_NAMES; do
+      $FS_CLI -x "conference $_cn xml_list" 2>/dev/null >> "$CONF_XML_TMP"
+    done
+    _parsed=$(python3 - "$CONF_XML_TMP" <<'PYEOF'
+import sys, json, re
+import xml.etree.ElementTree as ET
+with open(sys.argv[1]) as f:
+    raw = f.read()
+out = []
+for blob in re.findall(r"<conferences>.*?</conferences>", raw, re.DOTALL):
+    try:
+        root = ET.fromstring(blob)
+    except ET.ParseError:
+        continue
+    for conf in root.findall("conference"):
+        members = []
+        for m in conf.findall("members/member"):
+            if (m.get("type") or "") != "caller":
+                continue
+            flags = {}
+            fl = m.find("flags")
+            if fl is not None:
+                for f in list(fl):
+                    flags[f.tag] = (f.text == "true")
+            def gv(tag, default=""):
+                el = m.find(tag)
+                return el.text if el is not None and el.text is not None else default
+            try: ja = int(gv("join_time", "0") or 0)
+            except: ja = 0
+            members.append({
+                "member_id":        gv("id"),
+                "uuid":             gv("uuid"),
+                "caller_id_number": gv("caller_id_number"),
+                "caller_id_name":   gv("caller_id_name"),
+                "join_age_s":       ja,
+                "is_moderator":     bool(flags.get("is_moderator")),
+                "talking":          bool(flags.get("talking")),
+                "hold":             bool(flags.get("hold")),
+                "has_floor":        bool(flags.get("has_floor")),
+            })
+        try: rt = int(conf.get("run_time", "0") or 0)
+        except: rt = 0
+        try: mc = int(conf.get("member-count", "0") or 0)
+        except: mc = 0
+        out.append({
+            "name":         conf.get("name", ""),
+            "uuid":         conf.get("uuid", ""),
+            "member_count": mc,
+            "run_time_s":   rt,
+            "members":      members,
+        })
+print(json.dumps(out))
+PYEOF
+)
+    rm -f "$CONF_XML_TMP"
+    [ -n "$_parsed" ] && CONFERENCES_JSON="$_parsed"
+  fi
 fi
 
 # ── Components inventory (auto-detected by path/binary presence) ─────────
@@ -226,6 +310,7 @@ PAYLOAD=$(cat <<JSONEOF
   "net_tx_bytes": $NET_TX,
   "disks": $DISKS_JSON,
   "calls_in_progress": $CALLS_IN_PROGRESS,
+  "conferences": $CONFERENCES_JSON,
   "components": $COMPONENTS_JSON
 }
 JSONEOF
