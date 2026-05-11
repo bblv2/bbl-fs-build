@@ -5,4 +5,7 @@ host.conf
 # Common cruft
 .DS_Store
 *.bak
+*.bak.*
 *.swp
+__pycache__/
+*.pyc
