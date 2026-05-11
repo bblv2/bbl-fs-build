@@ -129,11 +129,22 @@ for blob in re.findall(r"<conferences>.*?</conferences>", raw, re.DOTALL):
         except: rt = 0
         try: mc = int(conf.get("member-count", "0") or 0)
         except: mc = 0
+        # Conference-level boolean flags. mod_conference's xml_list_conferences
+        # only emits attributes when set, so an absent "wait_mod" means false.
+        # Picking up: wait_mod, locked, recording, running, answered, etc.
+        # Drives the [HOLD MUSIC] pill in the dashboard expand panel — when
+        # wait_mod is active, every non-moderator hears MOH until a moderator
+        # joins.
+        conf_flags = {}
+        for k, v in conf.attrib.items():
+            if v == "true":  conf_flags[k] = True
+            elif v == "false": conf_flags[k] = False
         out.append({
             "name":         conf.get("name", ""),
             "uuid":         conf.get("uuid", ""),
             "member_count": mc,
             "run_time_s":   rt,
+            "flags":        conf_flags,
             "members":      members,
         })
 print(json.dumps(out))
