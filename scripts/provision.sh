@@ -304,13 +304,23 @@ if [[ "${ARGS[role]}" == "beta" ]]; then
     echo "==> Registering ${ARGS[hostname]} for beta testing (Telnyx + bridge + DID)"
     REGOUT=$(mktemp)
     "$PY" "$SCRIPTS/register.py" --hostname "${ARGS[hostname]}" | tee "$REGOUT"
-    # Append the persisted-IDs lines (they look like BBL_*=... after the
-    # printed "# Append to ..." marker) onto the operator's host.conf
+    # Persist register IDs (BBL_TELNYX_CONNECTION_ID, BBL_TEST_*, etc.) to
+    # /etc/bbl-fs-<short>.host.conf on rpt for later teardown. This file
+    # is STATE ONLY in the new flow — it's no longer read by provision.sh
+    # (which composes its own host.conf from VCS seeds + secrets). It
+    # exists solely so unregister.py / teardown.sh can roll back the
+    # Telnyx connection + DID pool when the box is destroyed.
+    REG_STATE="/etc/bbl-fs-${SHORT_HOST}.host.conf"
     if grep -q '^# Append to' "$REGOUT"; then
-        echo "" >> "$HOST_CONF"
-        echo "# bbl-fs-build register.py — written $(date -u +%Y-%m-%dT%H:%M:%SZ)" >> "$HOST_CONF"
-        sed -n '/^# Append to/,$p' "$REGOUT" | grep -E '^BBL_' >> "$HOST_CONF"
-        echo "==> Persisted register IDs to $HOST_CONF"
+        {
+            echo "# bbl-fs-build register.py state for ${ARGS[hostname]}"
+            echo "# Written $(date -u +%Y-%m-%dT%H:%M:%SZ) — consumed by unregister.py / teardown.sh."
+            echo "# NOT a seed file; provision.sh assembles host.conf from VCS seeds + /etc/bbl-fs-secrets.conf."
+            echo "BBL_DOMAIN=${ARGS[hostname]}"
+            sed -n '/^# Append to/,$p' "$REGOUT" | grep -E '^BBL_'
+        } | sudo tee "$REG_STATE" >/dev/null
+        sudo chmod 0600 "$REG_STATE"
+        echo "==> Persisted register IDs to $REG_STATE (state, not seed)"
     fi
     rm -f "$REGOUT"
 

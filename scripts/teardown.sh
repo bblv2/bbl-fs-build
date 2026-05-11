@@ -29,8 +29,9 @@ done
 LABEL="${HOSTNAME//./-}"
 
 # host-conf default: /etc/bbl-fs-<short>.host.conf (where provision.sh
-# persisted register.py IDs). Skip silently if absent — happens for
-# prod boxes (no register IDs to roll back) and pre-2026-05 builds.
+# persisted register.py IDs as state — see the file's own header).
+# Skip silently if absent — happens for prod boxes (no register IDs to
+# roll back) and pre-2026-05 builds.
 if [[ -z "$HOST_CONF" ]]; then
     DEFAULT_HOST_CONF="/etc/bbl-fs-${HOSTNAME%%.*}.host.conf"
     if [[ -r "$DEFAULT_HOST_CONF" ]]; then
