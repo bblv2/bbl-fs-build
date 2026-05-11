@@ -113,12 +113,52 @@ mode      = extra
 filter    = freeswitch
 logpath   = /var/log/freeswitch/freeswitch.log
 maxretry  = 5
-findtime  = 60
+findtime  = 300
 bantime   = 86400
 protocol  = udp
-port      = 5060,5080
-action    = nftables-multiport[name=freeswitch, port="5060,5080", protocol=udp]
+port      = 5060,5061,5080,5081
+action    = nftables-multiport[name=freeswitch, port="5060,5061,5080,5081", protocol=udp]
 ignoreip  = 127.0.0.1/8 192.76.120.0/24 64.16.224.0/19 64.16.250.10/32 192.76.120.31/32
+
+# Catch SIP scanners that get rejected by FreeSWITCH ACL before they ever
+# reach auth (sofia.c:NNNN "Rejected by acl"). The stock `freeswitch` filter
+# above only matches sofia_reg.c auth failures, so high-volume pre-auth
+# scanners (e.g. 37.187.144.149-style probing) slip through. 7h bantime
+# while we verify it doesn't catch legitimate traffic — bump later if clean.
+[freeswitch-acl]
+enabled   = true
+filter    = freeswitch-acl
+logpath   = /var/log/freeswitch/freeswitch.log
+maxretry  = 5
+findtime  = 300
+bantime   = 25200
+protocol  = udp
+port      = 5060,5061,5080,5081
+action    = nftables-multiport[name=freeswitch-acl, port="5060,5061,5080,5081", protocol=udp]
+ignoreip  = 127.0.0.1/8 192.76.120.0/24 64.16.224.0/19 64.16.250.10/32 192.76.120.31/32
+
+# Re-ban offenders that earn 5 separate bans in 24h with a blanket all-ports
+# block. Conservative 7h bantime to match freeswitch-acl; revisit once we
+# confirm no self-bans.
+[recidive]
+enabled   = true
+bantime   = 25200
+findtime  = 86400
+maxretry  = 5
+EOF
+
+# freeswitch-acl filter: matches FS ACL rejections (pre-auth scan traffic).
+# Log line format:
+#   2026-05-11 19:24:15.643439 100.00% [WARNING] sofia.c:10667 IP 1.2.3.4 Rejected by acl "all_deny"
+cat > /etc/fail2ban/filter.d/freeswitch-acl.conf <<'EOF'
+[INCLUDES]
+before = common.conf
+
+[Definition]
+_daemon = freeswitch
+failregex = ^.*\[WARN(?:ING)?\]\s+sofia\.c:\d+\s+IP\s+<HOST>\s+Rejected by acl\s+"[^"]*"\s*$
+ignoreregex =
+datepattern = ^%%Y-%%m-%%d[ T]%%H:%%M:%%S(?:\.%%f)?
 EOF
 
 # Drop any prior bbl-build provisional jail/filter (older provisions wrote

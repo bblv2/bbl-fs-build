@@ -87,7 +87,11 @@ Each step is small and idempotent — safe to re-run after a failure. Logs go to
 - SignalWire token similarly only on the box that needs it.
 - `ufw` is configured with deny-by-default inbound. Linode Cloud Firewall (if you attach one to the instance) is the outer perimeter; `ufw` is OS-level defense in depth.
 - TLS via Let's Encrypt + acme.sh. ECDSA p-256 keys (smaller, faster, modern).
-- fail2ban watches FreeSWITCH log for SIP auth failures and call rejections; bans for 24h after 5 failed attempts in 5 min.
+- fail2ban jails:
+  - `sshd` — 5 failed logins in 10 min → 24h ban
+  - `freeswitch` — 5 SIP auth failures/challenges in 5 min → 24h ban on UDP 5060/5061/5080/5081
+  - `freeswitch-acl` — 5 pre-auth ACL rejections (`sofia.c "Rejected by acl"`) in 5 min → 7h ban; catches scanners blocked before auth that the upstream filter ignores
+  - `recidive` — 5 separate bans in 24h → 7h blanket all-ports ban
 
 ## Tearing down
 
