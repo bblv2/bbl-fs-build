@@ -5,16 +5,23 @@
 #   scripts/provision.sh role=beta size=medium hostname=fs-test-4.bblapp.io
 #   scripts/provision.sh role=prod size=large  hostname=fs-atl-2.bblapp.io
 #
-# host-conf= is optional. If omitted, the script reads shared secrets
-# from /etc/bbl-fs.host.conf, derives a per-host file at
-# /etc/bbl-fs-<short>.host.conf with BBL_DOMAIN auto-set from hostname=,
-# and persists register.py IDs there. Operators no longer need to copy
-# the previous host's conf file forward by hand.
+# host-conf= is optional and now only used as an escape hatch. Default
+# flow: provision.sh assembles the new box's host.conf from four overlays
+# (later overrides earlier):
+#   1. seeds/defaults.conf                       (this repo, VCS)
+#   2. seeds/hosts/<short>.conf                  (this repo, VCS, optional)
+#   3. /etc/bbl-fs-secrets.conf                  (loose on rpt, required)
+#   4. /etc/bbl-fs-secrets.d/<short>.conf        (loose on rpt, optional)
+# BBL_DOMAIN is appended last from hostname=.
+#
+# register.py IDs (BBL_TELNYX_CONNECTION_ID, BBL_TEST_DID, etc.) are still
+# written to /etc/bbl-fs-host.conf on the running box after Telnyx
+# registration — they're runtime state, not seed.
 #
 # Prerequisites:
 #   - linode-cli installed and authenticated (`linode-cli configure`)
-#   - /etc/bbl-fs.host.conf populated once with BBL_B2_*, BBL_SIGNALWIRE_TOKEN,
-#     BBL_CERT_EMAIL, etc. (see host.conf.example for the field list).
+#   - /etc/bbl-fs-secrets.conf populated once with BBL_SIGNALWIRE_TOKEN,
+#     BBL_B2_KEY_ID, BBL_B2_APP_KEY. See seeds/secrets.example.conf.
 set -euo pipefail
 
 # Source operator-side env (BBL_MONITOR_DSN, TELNYX_API_KEY) needed by
@@ -82,51 +89,65 @@ fi
 SUBDOMAIN="${ARGS[hostname]%.$ROOT_DOMAIN}"
 echo "    DNS zone:    $ROOT_DOMAIN (ID $ZONE_ID), subdomain '$SUBDOMAIN'"
 
-# ── Resolve host.conf ────────────────────────────────────────────────
-# host-conf= is an escape hatch. Default flow: per-host file lives at
-# /etc/bbl-fs-<short>.host.conf and is auto-derived from the shared
-# secrets file at /etc/bbl-fs.host.conf on first provision. Re-provisions
-# reuse the existing per-host file so register.py IDs persist.
+# ── Assemble host.conf from VCS seeds + loose secrets ────────────────
+# Layered overlay (later overrides earlier):
+#   1. seeds/defaults.conf                       — VCS, required
+#   2. seeds/hosts/<short>.conf                  — VCS, optional
+#   3. /etc/bbl-fs-secrets.conf                  — loose on rpt, required
+#   4. /etc/bbl-fs-secrets.d/<short>.conf        — loose on rpt, optional
+# BBL_DOMAIN is appended last from hostname=.
+#
+# host-conf= remains as an escape hatch for one-off boxes that need an
+# entirely custom file. When supplied it short-circuits the overlay.
 SHORT_HOST="${ARGS[hostname]%%.*}"
-PER_HOST_CONF="/etc/bbl-fs-${SHORT_HOST}.host.conf"
-SHARED_CONF="${BBL_FS_SHARED_CONF:-/etc/bbl-fs.host.conf}"
+SEEDS_DIR="$BUILD_DIR/seeds"
+DEFAULTS="$SEEDS_DIR/defaults.conf"
+PER_HOST_DEFAULTS="$SEEDS_DIR/hosts/${SHORT_HOST}.conf"
+SECRETS="${BBL_FS_SECRETS:-/etc/bbl-fs-secrets.conf}"
+PER_HOST_SECRETS="/etc/bbl-fs-secrets.d/${SHORT_HOST}.conf"
+
+TMPDIR="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR"' EXIT
 
 if [[ -n "${ARGS[host-conf]}" ]]; then
     HOST_CONF="${ARGS[host-conf]}"
     [[ -r "$HOST_CONF" ]] || { echo "$0: cannot read $HOST_CONF" >&2; exit 2; }
-elif [[ -r "$PER_HOST_CONF" ]]; then
-    HOST_CONF="$PER_HOST_CONF"
-    echo "==> Reusing existing per-host conf: $HOST_CONF"
-elif [[ -r "$SHARED_CONF" ]]; then
-    echo "==> Creating $PER_HOST_CONF from $SHARED_CONF (BBL_DOMAIN=${ARGS[hostname]})"
-    install -m 0600 /dev/null "$PER_HOST_CONF"
-    cat "$SHARED_CONF" >> "$PER_HOST_CONF"
-    if grep -q '^BBL_DOMAIN=' "$PER_HOST_CONF"; then
-        sed -i "s|^BBL_DOMAIN=.*|BBL_DOMAIN=${ARGS[hostname]}|" "$PER_HOST_CONF"
-    else
-        echo "BBL_DOMAIN=${ARGS[hostname]}" >> "$PER_HOST_CONF"
-    fi
-    HOST_CONF="$PER_HOST_CONF"
+    echo "==> Using operator-supplied host.conf: $HOST_CONF (skipping overlay assembly)"
 else
-    echo "$0: no host-conf= supplied and neither $PER_HOST_CONF nor $SHARED_CONF exists." >&2
-    echo "    Populate $SHARED_CONF once (cp host.conf.example) and re-run." >&2
-    exit 2
+    [[ -r "$DEFAULTS" ]] || { echo "$0: missing $DEFAULTS (VCS-tracked)" >&2; exit 2; }
+    [[ -r "$SECRETS" ]]  || { echo "$0: missing $SECRETS — copy from $SEEDS_DIR/secrets.example.conf and fill in real values" >&2; exit 2; }
+    HOST_CONF="$TMPDIR/host.conf"
+    {
+        echo "# Assembled by bbl-fs-build/scripts/provision.sh at $(date -u +%Y-%m-%dT%H:%M:%SZ)"
+        echo "# Layers:"
+        echo "#   1. $DEFAULTS"
+        [[ -r "$PER_HOST_DEFAULTS" ]] && echo "#   2. $PER_HOST_DEFAULTS"
+        echo "#   3. $SECRETS"
+        [[ -r "$PER_HOST_SECRETS" ]] && echo "#   4. $PER_HOST_SECRETS"
+        echo "#   5. BBL_DOMAIN appended from hostname="
+        echo
+        cat "$DEFAULTS"
+        if [[ -r "$PER_HOST_DEFAULTS" ]]; then
+            echo
+            echo "# ── overlay: seeds/hosts/${SHORT_HOST}.conf ─────────────────────"
+            cat "$PER_HOST_DEFAULTS"
+        fi
+        echo
+        echo "# ── overlay: $SECRETS (secrets, loose on rpt) ──────────────"
+        cat "$SECRETS"
+        if [[ -r "$PER_HOST_SECRETS" ]]; then
+            echo
+            echo "# ── overlay: /etc/bbl-fs-secrets.d/${SHORT_HOST}.conf ───────────"
+            cat "$PER_HOST_SECRETS"
+        fi
+        echo
+        echo "# ── derived ─────────────────────────────────────────────────────"
+        echo "BBL_DOMAIN=${ARGS[hostname]}"
+    } > "$HOST_CONF"
+    chmod 0600 "$HOST_CONF"
+    echo "==> Assembled host.conf at $HOST_CONF"
 fi
 
-# Sanity: BBL_DOMAIN in the host.conf must match hostname=, or the box
-# identifies itself as something else (wrong TLS cert FQDN, wrong
-# Telnyx connection, etc.). Bit fs-test-4 on 2026-05-02 when an
-# fs-test-3 host.conf was reused.
-EXISTING_DOMAIN="$(awk -F= '/^BBL_DOMAIN=/{print $2; exit}' "$HOST_CONF" | tr -d ' \r')"
-if [[ -n "$EXISTING_DOMAIN" && "$EXISTING_DOMAIN" != "${ARGS[hostname]}" ]]; then
-    echo "$0: BBL_DOMAIN in $HOST_CONF is '$EXISTING_DOMAIN' but hostname= is '${ARGS[hostname]}'." >&2
-    echo "    Fix the conf, or omit host-conf= to auto-derive." >&2
-    exit 2
-fi
-
-# ── Build user_data: bootstrap.sh + the operator's host.conf ─────────
-TMPDIR="$(mktemp -d)"
-trap 'rm -rf "$TMPDIR"' EXIT
 
 # Construct cloud-init user_data combining:
 #   - /etc/bbl-fs-host.conf  (operator-supplied host knobs + secrets)

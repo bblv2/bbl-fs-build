@@ -27,19 +27,24 @@ Pick the size that matches your expected load. The build is identical across siz
 # 1. Prerequisites (one-time on operator's machine)
 brew install linode-cli jq                # macOS
 linode-cli configure                       # paste API token
-sudo cp host.conf.example /etc/bbl-fs.host.conf
-sudo $EDITOR /etc/bbl-fs.host.conf         # fill in shared secrets only
-                                           # (no BBL_DOMAIN, no BBL_EXTERNAL_IP)
 
-# 2. Provision (host-conf is auto-derived per-host)
+# Non-secret defaults + per-host overrides ship with this repo at
+#   seeds/defaults.conf  and  seeds/hosts/<short>.conf
+# Only secrets stay loose on rpt:
+sudo install -m 0700 -d /etc/bbl-fs-secrets.d
+sudo cp seeds/secrets.example.conf /etc/bbl-fs-secrets.conf
+sudo chmod 0600 /etc/bbl-fs-secrets.conf
+sudo $EDITOR /etc/bbl-fs-secrets.conf      # fill in SignalWire token + B2 keys
+# Per-host secret overrides (rare) go in /etc/bbl-fs-secrets.d/<short>.conf
+
+# 2. Provision (host.conf is assembled from seeds + secrets at run time)
 ./scripts/provision.sh \
     role=beta \
     size=small \
     hostname=fs-beta-1.bblapp.io
 
-# Pass host-conf=<path> only as an escape hatch — by default the script
-# creates /etc/bbl-fs-<short>.host.conf from /etc/bbl-fs.host.conf with
-# BBL_DOMAIN auto-set, and persists register.py IDs there for teardown.
+# Pass host-conf=<path> only as an escape hatch for one-off boxes that
+# need an entirely custom file.
 
 # 3. Wait 5 min, tail /var/log/bbl-fs-build.log on the new box if you want
 ssh root@<linode-ip> tail -f /var/log/bbl-fs-build.log
@@ -75,8 +80,10 @@ Each step is small and idempotent — safe to re-run after a failure. Logs go to
 
 ## Security
 
-- `host.conf` is **never committed**. `.gitignore` blocks it. The example file (`host.conf.example`) shows what fields exist with empty values.
-- B2 credentials live in `/etc/bbl-fs-host.conf` (mode 600) and `/root/.config/rclone/rclone.conf` (mode 600). Nowhere else on disk.
+- Non-secret defaults and per-host overrides live in `seeds/` and are in VCS.
+- Secrets are kept in `/etc/bbl-fs-secrets.conf` (mode 0600) on rpt and (optionally) per-host overrides in `/etc/bbl-fs-secrets.d/<short>.conf`. `seeds/secrets.example.conf` lists the fields.
+- At provision time, `scripts/provision.sh` assembles a single `/etc/bbl-fs-host.conf` (mode 0600) on the new box from the four layers.
+- B2 credentials end up in `/etc/bbl-fs-host.conf` (mode 600) and `/root/.config/rclone/rclone.conf` (mode 600). Nowhere else on disk.
 - SignalWire token similarly only on the box that needs it.
 - `ufw` is configured with deny-by-default inbound. Linode Cloud Firewall (if you attach one to the instance) is the outer perimeter; `ufw` is OS-level defense in depth.
 - TLS via Let's Encrypt + acme.sh. ECDSA p-256 keys (smaller, faster, modern).
@@ -137,5 +144,8 @@ templates/               # rendered files (rclone.conf, cron, motd, push script)
 scripts/                 # local-side helpers
   provision.sh           # linode-cli wrapper to create a new box
   teardown.sh            # drain + snapshot + delete
-host.conf.example        # operator copies + fills in
+seeds/                   # non-secret VCS-tracked seed for host.conf
+  defaults.conf          # cluster-wide defaults
+  hosts/<short>.conf     # per-host non-secret overrides (optional)
+  secrets.example.conf   # template for /etc/bbl-fs-secrets.conf on rpt
 ```
