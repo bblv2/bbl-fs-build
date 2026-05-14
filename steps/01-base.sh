@@ -19,8 +19,7 @@ apt-get install -y -q \
     fail2ban ufw \
     rclone \
     sngrep tcpdump dnsutils net-tools jq \
-    cron logrotate \
-    ffmpeg
+    cron logrotate
 
 echo "==> Locale + timezone"
 timedatectl set-timezone UTC
