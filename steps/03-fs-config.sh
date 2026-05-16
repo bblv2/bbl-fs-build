@@ -82,6 +82,36 @@ echo "==> Removing vestigial vanilla sip_profiles (internal, external-ipv6)"
 rm -f /etc/freeswitch/sip_profiles/internal.xml \
       /etc/freeswitch/sip_profiles/external-ipv6.xml
 
+# Remove vanilla-shipped example users from /etc/freeswitch/directory/default/.
+# These are FreeSwitch's stock "Extension 10xx" demo accounts plus a few
+# other noise files. They all ship with password=$${default_password}
+# (unset in vars.xml), and on FS 1.10.x sofia accepts ANY password as a
+# match against an unset/empty configured password — verified live on
+# 2026-05-16 by REGISTER-ing as 1001 with literal "1234callers" AND with
+# a wrong password; both returned 200 OK. That's an unauthenticated
+# back-door against the client profile (port 5080 UDP + 7443 WSS)
+# unless we delete the files.
+#
+# The "user id=default" file is worse: its own header comment notes
+# the user "can register without a password" — also defanged today by
+# our `accept-blind-reg=false` profile param, but still pure noise.
+#
+# We keep only the overlay's actual BBL users:
+#   - 9001-9025.xml  (call-test fixtures, see bbl-call-tests)
+#   - 9999.xml       (QA Drop-in / operator Blink softphone)
+#   - 2332.xml       (JFB browser SDK, see bbl-fs-config commit f4b780d)
+echo "==> Removing vanilla example users (1000-1019 + brian + default + example.com + skinny)"
+for f in /etc/freeswitch/directory/default/{1000..1019}.xml \
+         /etc/freeswitch/directory/default/brian.xml \
+         /etc/freeswitch/directory/default/default.xml \
+         /etc/freeswitch/directory/default/example.com.xml \
+         /etc/freeswitch/directory/default/skinny-example.xml; do
+    if [[ -f "$f" ]]; then
+        rm -f "$f"
+        echo "    rm $f"
+    fi
+done
+
 # CA bundle for mod_http_cache HTTPS downloads. http_cache.conf.xml
 # references $${certs_dir}/cacert.pem (resolves to /etc/freeswitch/tls/
 # cacert.pem). Without this file, every HTTPS GetDigits/playback URL
