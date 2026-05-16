@@ -161,6 +161,18 @@ ignoreregex =
 datepattern = ^%%Y-%%m-%%d[ T]%%H:%%M:%%S(?:\.%%f)?
 EOF
 
+# Patch the upstream `freeswitch` filter's _pref_line to tolerate the
+# CPU-usage token FS emits between the timestamp and `[WARNING]` (e.g.
+# " 87.77%"). Without this, the stock prefregex matches zero lines on
+# current FS builds and the jail is silently dead — discovered after a
+# 172k-probe toll-fraud scan ran 10h unhindered on fs-atl28 (2026-05-15).
+# Idempotent: only adds the trailing `(?:\s+\d+(?:\.\d+)?%%)?` once.
+if [ -f /etc/fail2ban/filter.d/freeswitch.conf ] \
+   && ! grep -q '\\.\\\\d+)?%%)' /etc/fail2ban/filter.d/freeswitch.conf; then
+    sed -i -E 's|(_pref_line = \^%\(__prefix_line\)s\(\?:\(\?:\\d\+-\)\?\\d\+-\\d\+ \\d\+:\\d\+:\\d\+\\\.\\d\+\)\?)$|\1(?:\\s+\\d+(?:\\.\\d+)?%%)?|' \
+        /etc/fail2ban/filter.d/freeswitch.conf
+fi
+
 # Drop any prior bbl-build provisional jail/filter (older provisions wrote
 # /etc/fail2ban/{jail.d,filter.d}/freeswitch-bbl.conf — supplanted by the
 # upstream `freeswitch` filter referenced above).
