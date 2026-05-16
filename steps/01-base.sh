@@ -110,11 +110,17 @@ ignoreip = 127.0.0.1/8 168.227.227.0/24
 [freeswitch]
 enabled   = true
 mode      = extra
-filter    = freeswitch
+filter    = freeswitch[jfb_user=2332]
 logpath   = /var/log/freeswitch/freeswitch.log
-maxretry  = 5
+# "Two tries with a traffic pattern that doesn't look like telnyx and
+# you are banned" — Graham, 2026-05-16. JFB users typically produce
+# 1 auth-challenge line per session (the initial REGISTER without
+# auth). With maxretry=2 they're below the threshold; the ignoreregex
+# in the filter pins this to the JFB user 2332 + INVITE destinations
+# matching +1\d{10} (US/CA bridge DIDs).
+maxretry  = 2
 findtime  = 60
-bantime   = 86400
+bantime   = -1
 protocol  = udp
 port      = 5060,5061,5080,5081
 action    = nftables-multiport[name=freeswitch, port="5060,5061,5080,5081", protocol=udp]
@@ -171,6 +177,47 @@ if [ -f /etc/fail2ban/filter.d/freeswitch.conf ] \
    && ! grep -q '\\.\\\\d+)?%%)' /etc/fail2ban/filter.d/freeswitch.conf; then
     sed -i -E 's|(_pref_line = \^%\(__prefix_line\)s\(\?:\(\?:\\d\+-\)\?\\d\+-\\d\+ \\d\+:\\d\+:\\d\+\\\.\\d\+\)\?)$|\1(?:\\s+\\d+(?:\\.\\d+)?%%)?|' \
         /etc/fail2ban/filter.d/freeswitch.conf
+fi
+
+# Add a JFB-aware ignoreregex to the upstream filter so a maxretry=2
+# threshold doesn't false-positive on legitimate JFB traffic. The
+# JFB browser SDK produces exactly one "SIP auth challenge (REGISTER)"
+# log line per session (initial REGISTER → 401 → second REGISTER with
+# auth → 200). One occurrence wouldn't trip maxretry=2 anyway, but
+# the ignoreregex below pins this to the legit pattern explicitly:
+#
+#   1. REGISTER attempts where the To: URI is 2332@<our-FS-IP>
+#      (the JFB user added in bbl-fs-config commit f4b780d)
+#   2. INVITE attempts where the Request-URI is +1<10digits>@<host>
+#      (US/CA E.164 bridge DIDs — what JFB actually dials)
+#
+# Scanner traffic doesn't match either: REGISTERs target random
+# username strings like 15167, 3272, 55525, …; INVITEs target
+# garbage-prefixed dial strings like +363816135100251 that fail
+# the +1\d{10} shape.
+#
+# `jfb_user` is parameterized in jail.local (filter = freeswitch[jfb_user=2332])
+# so we can rotate the JFB user without re-editing the filter file.
+# Must REPLACE the existing empty `ignoreregex =` line in-place — appending
+# a second one triggers ConfigParser's duplicate-key error and the jail
+# refuses to load. Python (not sed) because the multi-line replacement
+# is far less hairy in Python's str.replace.
+if [ -f /etc/fail2ban/filter.d/freeswitch.conf ] \
+   && ! grep -q '^# bbl-jfb-ignore' /etc/fail2ban/filter.d/freeswitch.conf; then
+    python3 - <<'PYEOF'
+p = "/etc/fail2ban/filter.d/freeswitch.conf"
+s = open(p).read().rstrip() + "\n"
+old = "ignoreregex =\n"
+new = (
+    "# bbl-jfb-ignore: legitimate JFB traffic from the BBL Angular SPA.\n"
+    "# jfb_user is passed from jail.local via filter = freeswitch[jfb_user=NNNN].\n"
+    "jfb_user = 2332\n"
+    "ignoreregex = ^SIP auth challenge \\(REGISTER\\) on sofia profile '[^']+' for \\[%(jfb_user)s@\n"
+    "              ^SIP auth challenge \\(INVITE\\) on sofia profile '[^']+' for \\[\\+1\\d{10}@\n"
+)
+if old in s:
+    open(p, "w").write(s.replace(old, new, 1))
+PYEOF
 fi
 
 # Drop any prior bbl-build provisional jail/filter (older provisions wrote
