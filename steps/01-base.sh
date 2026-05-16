@@ -124,7 +124,7 @@ bantime   = -1
 protocol  = udp
 port      = 5060,5061,5080,5081
 action    = nftables-multiport[name=freeswitch, port="5060,5061,5080,5081", protocol=udp]
-ignoreip  = 127.0.0.1/8 192.76.120.0/24 64.16.224.0/19 64.16.250.10/32 192.76.120.31/32
+ignoreip  = 127.0.0.1/8 192.76.120.0/24 64.16.224.0/19 64.16.250.10/32 192.76.120.31/32 45.79.211.163/32 35.192.167.125/30 173.230.135.133/30 66.228.60.230/30 2.57.171.0/24
 
 # Catch SIP scanners that get rejected by FreeSWITCH ACL before they ever
 # reach auth (sofia.c:NNNN "Rejected by acl"). The stock `freeswitch` filter
@@ -141,7 +141,7 @@ bantime   = 25200
 protocol  = udp
 port      = 5060,5061,5080,5081
 action    = nftables-multiport[name=freeswitch-acl, port="5060,5061,5080,5081", protocol=udp]
-ignoreip  = 127.0.0.1/8 192.76.120.0/24 64.16.224.0/19 64.16.250.10/32 192.76.120.31/32
+ignoreip  = 127.0.0.1/8 192.76.120.0/24 64.16.224.0/19 64.16.250.10/32 192.76.120.31/32 45.79.211.163/32 35.192.167.125/30 173.230.135.133/30 66.228.60.230/30 2.57.171.0/24
 
 # Re-ban offenders that earn 5 separate bans in 24h with a blanket all-ports
 # block. Conservative 7h bantime to match freeswitch-acl; revisit once we
@@ -208,11 +208,22 @@ if [ -f /etc/fail2ban/filter.d/freeswitch.conf ] \
 p = "/etc/fail2ban/filter.d/freeswitch.conf"
 s = open(p).read().rstrip() + "\n"
 old = "ignoreregex =\n"
+# REGISTER ignoreregex covers three legitimate user families that all
+# produce an "auth challenge" log line on their initial REGISTER (before
+# they send credentials):
+#   - %(jfb_user)s   the JFB browser SDK user (2332 by default)
+#   - 9\d{3}         the bbl-fs-config overlay test/QA accounts
+#                    (9001-9025 = bbl-call-tests fixtures,
+#                     9999 = QA Drop-in / operator Blink softphone)
+# INVITE ignoreregex covers JFB sessions calling US/CA E.164 bridge DIDs.
+# Scanner traffic doesn't match either: REGISTERs target random digits
+# like 15167/3272; INVITEs target garbage like +363816135100251.
 new = (
-    "# bbl-jfb-ignore: legitimate JFB traffic from the BBL Angular SPA.\n"
+    "# bbl-jfb-ignore: legitimate JFB traffic from the BBL Angular SPA\n"
+    "# plus the bbl-fs-config overlay's test/QA SIP users (9001-9999).\n"
     "# jfb_user is passed from jail.local via filter = freeswitch[jfb_user=NNNN].\n"
     "jfb_user = 2332\n"
-    "ignoreregex = ^SIP auth challenge \\(REGISTER\\) on sofia profile '[^']+' for \\[%(jfb_user)s@\n"
+    "ignoreregex = ^SIP auth challenge \\(REGISTER\\) on sofia profile '[^']+' for \\[(?:%(jfb_user)s|9\\d{3})@\n"
     "              ^SIP auth challenge \\(INVITE\\) on sofia profile '[^']+' for \\[\\+1\\d{10}@\n"
 )
 if old in s:
